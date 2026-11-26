@@ -238,7 +238,7 @@ export async function createBff(config: BffConfig = readConfig()) {
       "connection":"keep-alive",
     });
     const controller=new AbortController();
-    request.raw.on("close",()=>controller.abort());
+    reply.raw.on("close",()=>controller.abort());
     try {
       for await (const chunk of upstream.body) {
         if (controller.signal.aborted) break;
