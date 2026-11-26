@@ -110,3 +110,12 @@ def test_new_case_has_friendly_confirmation():
     assert "Prontinho!" in reply.response
     assert reply.session.session_id != session.session_id
     assert fake.calls == 0
+
+
+def test_thanks_is_friendly_and_avoids_openai():
+    from sentinela.domain.guardrails import THANKS
+    agent, fake, session = setup()
+    reply = agent.execute(message("Valeu"), session)
+    assert reply.response == THANKS
+    assert reply.session == session
+    assert fake.calls == 0

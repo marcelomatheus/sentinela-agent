@@ -74,15 +74,9 @@ def render(assessment: Assessment, question: str | None = None) -> str:
         for matched in assessment.rules[:2]:
             lines.append(f"{matched.conclusion}. {matched.advice}")
     elif assessment.risk == Risk.MODERATE:
-        lines = [
-            "Tem alguns sinais de alerta aqui. 🤔",
-            "Ainda não dá para afirmar que é golpe. Vamos entender melhor?",
-        ]
+        lines = ["🤔 Vejo alguns sinais de alerta, mas ainda preciso entender melhor."]
     else:
-        lines = [
-            "Ainda tenho poucas informações para avaliar. 🙂",
-            "Me conta só mais um detalhe?",
-        ]
+        lines = ["Ainda tenho poucas informações para avaliar. 🙂"]
 
     if question is not None and question in QUESTIONS:
         lines.append(QUESTIONS[question][1])

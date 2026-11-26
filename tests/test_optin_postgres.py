@@ -297,3 +297,24 @@ def test_zero_delay_can_be_configured(store) -> None:
     assert pending is not None and pending.message.message_id == activate.message_id
     assert pending.response == ACTIVATED
     instant.finish(pending, "done")
+
+
+def test_scheduled_reply_survives_worker_recovery(store) -> None:
+    from sentinela.infrastructure.postgres import Store
+    sender = wid()
+    activation = message("SENTINELA", sender)
+    job = claim(store, activation)
+    assert store.gate(job) is False
+    with store.connect() as conn:
+        before = conn.execute(
+            "SELECT available_at FROM app.inbox WHERE id=%s", (job.id,)
+        ).fetchone()["available_at"]
+    restarted = Store(store.settings)
+    restarted.recover()
+    with restarted.connect() as conn:
+        after = conn.execute(
+            "SELECT status,response,available_at FROM app.inbox WHERE id=%s", (job.id,)
+        ).fetchone()
+    assert after["status"] == "ready"
+    assert after["response"] == ACTIVATED
+    assert after["available_at"] == before

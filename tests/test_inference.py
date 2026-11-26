@@ -36,6 +36,7 @@ def test_risk_response_is_short_and_actionable():
 def test_inconclusive_response_is_friendly_with_single_question():
     response = render(infer(frozenset()), "money")
     assert "poucas informações" in response
+    assert response.count("?") == 1
     assert "pagamento ou transferência" in response
     assert len(response) < 250
     assert "https://" not in response

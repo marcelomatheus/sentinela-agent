@@ -23,6 +23,7 @@ INVALID = (
     "Não consegui entender esse conteúdo com segurança. "
     "Pode me enviar uma descrição curta, sem dados pessoais?"
 )
+THANKS = "Por nada! 🙂 Se receber outra mensagem suspeita, pode me chamar."
 
 @dataclass(frozen=True, slots=True)
 class Policy:
@@ -35,8 +36,14 @@ class Policy:
         normalized = unicodedata.normalize("NFKD", text.casefold())
         normalized = "".join(c for c in normalized if not unicodedata.combining(c) and unicodedata.category(c) != "Cf")
         normalized = " ".join(normalized.split())
-        if normalized in {"oi", "ola", "bom dia", "boa tarde", "boa noite", "quem e voce", "quem e voce?", "/ajuda", "/help"}:
+        if normalized in {
+            "oi", "ola", "e ai", "eai", "tudo bem", "oi sentinela",
+            "bom dia", "boa tarde", "boa noite", "quem e voce",
+            "quem e voce?", "/ajuda", "/help",
+        }:
             return IDENTITY
+        if normalized in {"obrigado", "obrigada", "valeu", "muito obrigado", "muito obrigada"}:
+            return THANKS
         # Only intercept direct requests to override the bot. Quoted scam
         # evidence must be analyzed, not discarded as an injection attempt.
         direct = re.match(r"^(?:sentinela[, :]\s*)?(?:ignore|esqueca|desconsidere|override|disregard|forget|revele|mostre|exiba|print|dump|reveal)\b", normalized)
