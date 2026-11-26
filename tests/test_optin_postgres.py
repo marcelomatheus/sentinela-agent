@@ -288,6 +288,19 @@ def test_delayed_reply_does_not_block_other_contacts(store) -> None:
         ).fetchone()
     assert quota is None
 
+    # Clean up both pending jobs so later tests never depend on timing.
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE app.inbox SET available_at=now() WHERE instance=%s AND message_id=%s",
+            (activate.instance, activate.message_id),
+        )
+    sent = store.claim()
+    assert sent is not None and sent.message.message_id == activate.message_id
+    store.finish(sent, "done")
+    following = store.claim()
+    assert following is not None and following.message.message_id == second.message_id
+    store.finish(following, "done")
+
 
 def test_zero_delay_can_be_configured(store) -> None:
     instant = type(store)(store.settings.model_copy(update={"gate_reply_delay_seconds": 0.0}))
@@ -318,3 +331,8 @@ def test_scheduled_reply_survives_worker_recovery(store) -> None:
     assert after["status"] == "ready"
     assert after["response"] == ACTIVATED
     assert after["available_at"] == before
+    with restarted.connect() as conn:
+        conn.execute("UPDATE app.inbox SET available_at=now() WHERE id=%s", (job.id,))
+    sent = restarted.claim()
+    assert sent is not None and sent.id == job.id
+    restarted.finish(sent, "done")
