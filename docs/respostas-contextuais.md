@@ -6,7 +6,7 @@ Anteriormente, o renderizador mostrava literalmente a classificação e até dua
 
 ## Estratégia aplicada
 
-1. A extração estruturada Agno retorna `present`, `absent`, `continues_previous`, `in_scope` e agora `context_note` (até 160 caracteres). Isso reutiliza a chamada existente, sem criar outro agente gerador de respostas.
+1. A extração estruturada Agno retorna `present`, `absent`, `continues_previous`, `in_scope` e agora `context_note` (solicitado em até 160 caracteres; o filtro local aceita até 145). Isso reutiliza a chamada existente, sem criar outro agente gerador de respostas.
 2. O novo campo é apenas uma observação textual neutra, não uma decisão. O código de domínio valida tamanho, caracteres, ausência de links/códigos/instruções e compatibilidade lexical com o texto da mensagem. Imagens sem legenda podem receber um resumo, mas não há garantia de correspondência sem validação de imagem.
 3. As 12 regras, o cálculo do risco, as perguntas disponíveis e recomendações permanecem determinísticos. A resposta insere a observação validada como contexto conversacional; se inválida, retorna ao texto seguro preexistente.
 4. A aplicação detecta início explícito de outro caso e mudança de cenário (`BANK`, `FAMILY`, `SHOP`, `PRIZE`, `JOB`, `INVESTMENT`, `DELIVERY`). Nesses casos, reinicia `session_id` e apaga fatos, ausências e perguntas, mesmo quando o modelo indicou continuidade equivocadamente.
