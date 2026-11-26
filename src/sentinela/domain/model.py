@@ -53,6 +53,7 @@ class Session:
     facts: frozenset[Fact]
     absent: frozenset[Fact] = frozenset()
     last_question: str | None = None
+    asked_questions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ class Observation:
     present: frozenset[Fact]
     absent: frozenset[Fact]
     continues_previous: bool
+    in_scope: bool = True
 
 
 @dataclass(frozen=True, slots=True)
