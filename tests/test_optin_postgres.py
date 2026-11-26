@@ -26,6 +26,9 @@ def store():
     with result.connect() as conn:
         conn.execute(Path("db/001_initial.sql").read_text(encoding="utf-8"))
     result.migrate_guardrails()
+    # CI uses a disposable PostgreSQL instance: isolate each integration case.
+    with result.connect() as conn:
+        conn.execute("TRUNCATE app.inbox, app.sessions, app.guard_budget RESTART IDENTITY")
     return result
 
 
@@ -47,7 +50,7 @@ def claim(store, sent):
     return current
 
 
-def confirm_ready(store, job, expected: str) -> None:
+def confirm_ready(store, job, expected: str, *, delayed: bool = True) -> None:
     with store.connect() as conn:
         row = conn.execute(
             "SELECT status,response,available_at,now() AS db_now FROM app.inbox WHERE id=%s",
@@ -55,8 +58,11 @@ def confirm_ready(store, job, expected: str) -> None:
         ).fetchone()
         assert row["status"] == "ready"
         assert row["response"] == expected
-        # Scheduled delivery: the worker never sleeps inside a message handler.
-        assert row["available_at"] > row["db_now"]
+        # Gate replies wait briefly; inference results are delivered normally.
+        if delayed:
+            assert row["available_at"] > row["db_now"]
+        else:
+            assert row["available_at"] <= row["db_now"]
         conn.execute(
             "UPDATE app.inbox SET available_at=now() WHERE id=%s",
             (job.id,),
@@ -114,7 +120,7 @@ def test_activate_analyze_close_ignore_reactivate_and_recover(store) -> None:
                       absent=frozenset({Fact.MONEY}), last_question="code",
                       asked_questions=frozenset({"code"}))
     fresh.save_result(analyzing, changed, "exemplo")
-    confirm_ready(fresh, analyzing, "exemplo")
+    confirm_ready(fresh, analyzing, "exemplo", delayed=False)
 
     # /nova and media go through analysis; the gate never treats them as commands.
     media = message("", sender, media=True)
