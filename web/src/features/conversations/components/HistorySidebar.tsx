@@ -1,4 +1,4 @@
-import { LogOut, Menu, MessageSquarePlus, ShieldCheck, Trash2, X } from "lucide-react";
+import { LogOut, MessageSquarePlus, ShieldCheck, Trash2, X } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { client } from "../../../lib/api/client";
