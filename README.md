@@ -36,7 +36,7 @@ Um contexto delimitado (triagem de fraude); não há abstrações de microservi�
 
 ## Executar na VPS
 
-Pré-requisitos: Docker Engine + Compose v2, instância Evolution API v2 existente com suporte a headers personalizados e chave OpenAI. Exponha a API por HTTPS via seu proxy reverso/Cloudflare Tunnel. O Postgres não publica portas. A API está vinculada a `127.0.0.1:8080` por padrão; se o proxy for um container, conecte os serviços à rede privada dele e aponte para `api:8080` (não use localhost de outro container).
+Pré-requisitos: Docker Engine + Compose v2, instância Evolution API v2 existente com suporte a headers personalizados e chave OpenAI. **Na mesma VPS, não há necessidade de expor o webhook publicamente:** use a rede Docker compartilhada. Quando a Evolution estiver fora da rede privada, use um proxy HTTPS. O Postgres não publica portas. A API está vinculada a `127.0.0.1:8080` por padrão; se o proxy for um container, conecte os serviços à rede privada dele e aponte para `api:8080` (não use localhost de outro container).
 
 ```bash
 cp .env.example .env
@@ -48,6 +48,7 @@ openssl rand -hex 32
 poetry env use python3.15
 poetry lock
 poetry check --lock
+docker network inspect whatsapp_internal >/dev/null 2>&1 || docker network create whatsapp_internal
 docker compose config --quiet
 docker compose up -d --build
 curl -fsS http://127.0.0.1:8080/health/ready
@@ -62,9 +63,46 @@ docker run --rm -v "$PWD:/app" -w /app python:3.15.2-slim sh -c 'pip install poe
 
 O lock **não foi gerado no ambiente de autoria** (sem rede/Python 3.15). Gere, valide e versione `poetry.lock` antes do primeiro deploy. A imagem permite resolver dependências se o lock estiver ausente, mas esse caminho não é reproduzível. Em volumes já existentes, `docker-entrypoint-initdb.d` não reexecuta scripts: aplique `db/001_initial.sql` explicitamente se necessário.
 
+### Conectar a Evolution API à rede Docker privada
+
+O `compose.yaml` do Sentinela conecta **somente o serviço `api`** à rede externa `whatsapp_internal` e define o alias `sentinela-api`. `db` e `worker` permanecem somente na rede interna do Sentinela. A rede externa é intencionalmente **pré-criada** (Compose não a cria automaticamente).
+
+```bash
+docker network inspect whatsapp_internal >/dev/null 2>&1 || docker network create whatsapp_internal
+docker compose up -d --build
+```
+
+Se a Evolution API roda em **outro projeto Docker Compose da mesma VPS**, adicione ao **serviço da Evolution** a rede externa abaixo, mantendo também as redes que ele já utiliza:
+
+```yaml
+services:
+  evolution:
+    networks:
+      - default
+      - whatsapp_internal
+
+networks:
+  whatsapp_internal:
+    name: whatsapp_internal
+    external: true
+```
+
+O nome `evolution` é ilustrativo: aplique a alteração ao nome real do serviço de sua instalação e recrie-o (`docker compose up -d` na pasta da Evolution). Não substitua outras redes necessárias, nem adicione o banco de dados da Evolution à rede compartilhada.
+
+Para verificar o DNS e a conectividade a partir da rede, use:
+
+```bash
+docker run --rm --network whatsapp_internal curlimages/curl:8.11.1 \
+  --fail --show-error http://sentinela-api:8080/health/live
+```
+
+Depois configure `WEBHOOK_URL=http://sentinela-api:8080/webhooks/evolution` no `.env` **do Sentinela**. Execute `configure_webhook.py --apply` no container **api do Sentinela** (onde está o script), não no da Evolution. Este script requer que `EVOLUTION_API_URL` seja acessível **a partir do container do Sentinela**, além de exigir a chave `EVOLUTION_API_KEY`.
+
+**Política de segurança:** HTTP é permitido somente para o alias `sentinela-api`, porta `8080` e caminho `/webhooks/evolution`; qualquer outro destino HTTP é rejeitado. URLs HTTPS externas continuam permitidas, sem credenciais nem parâmetros no endereço. A autenticação `apikey` permanece obrigatória no webhook. A rede Docker compartilhada não equivale a isolamento criptográfico: dê acesso apenas a containers confiáveis. Não abra a porta 8080 no firewall da VPS.
+
 ### Evolution API
 
-Configure `PUBLIC_WEBHOOK_URL=https://seu-dominio/webhooks/evolution`. O script abaixo **substitui o webhook previamente configurado** na instância; use uma instância dedicada ou confira se a alteração não interromperá automações existentes.
+Configure `WEBHOOK_URL=http://sentinela-api:8080/webhooks/evolution` quando a Evolution estiver na rede Docker compartilhada (ou `WEBHOOK_URL=https://seu-dominio/webhooks/evolution` para acesso externo). O script abaixo **substitui o webhook previamente configurado** na instância; use uma instância dedicada ou confira se a alteração não interromperá automações existentes.
 
 ```bash
 docker compose exec api python scripts/configure_webhook.py --apply
