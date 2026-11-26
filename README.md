@@ -71,6 +71,12 @@ Depois da ativação, fotos e áudios enviados nessa conversa também podem ser 
 
 Se a mensagem não trouxer indícios suficientes, o Sentinela seleciona perguntas conforme os fatos presentes: banco → possível pedido de código; transferência → origem do contato; loja ou vaga → adiantamento. Não inventa uma classificação. Quando nem o conteúdo do pedido é identificado, solicita a mensagem original ou mais contexto. Saídas inválidas da IA são distinguidas de entrada inválida; falhas técnicas após retries recebem um aviso curto que não afirma ter detectado golpe. Os erros são registrados com códigos técnicos, sem inserir mensagens do usuário no log.
 
+## Respostas vinculadas à mensagem atual
+
+O modelo Agno extrai fatos e também um resumo observacional **curto e sem dados sensíveis** (`context_note`) em uma única chamada. A aplicação filtra esse resumo e só o usa quando há evidência textual compatível; links, números de identificação, comandos e conteúdo estranho são descartados. A **classificação ALTO/MODERADO/INCONCLUSIVO e os conselhos preventivos continuam sendo definidos pelas 12 regras**, não pela IA. Veja [docs/respostas-contextuais.md](docs/respostas-contextuais.md).
+
+O sistema também evita acumular fatos de golpes diferentes: o identificador de sessão, fatos, ausências e perguntas são reiniciados ao detectar outra mensagem/caso explicitamente ou um tipo de golpe diferente. Em perguntas de acompanhamento do mesmo caso, a resposta dá atenção ao detalhe novo e não repete toda a classificação já apresentada. A mudança não cria looping autônomo nem uma nova chamada ao modelo.
+
 ## Executar na VPS
 
 Pré-requisitos: Docker Engine + Compose v2, instância Evolution API v2 existente com suporte a headers personalizados e chave OpenAI. **Na mesma VPS, não há necessidade de expor o webhook publicamente:** use a rede Docker compartilhada. Quando a Evolution estiver fora da rede privada, use um proxy HTTPS. O Postgres não publica portas. A API está vinculada a `127.0.0.1:8080` por padrão; se o proxy for um container, conecte os serviços à rede privada dele e aponte para `api:8080` (não use localhost de outro container).

@@ -64,6 +64,8 @@ class Observation:
     absent: frozenset[Fact]
     continues_previous: bool
     in_scope: bool = True
+    # Neutral detail from the current message, never the risk classification.
+    context_note: str = ""
 
 
 @dataclass(frozen=True, slots=True)

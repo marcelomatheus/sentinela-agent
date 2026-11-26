@@ -74,28 +74,55 @@ def question_options(assessment: Assessment, absent: frozenset[Fact]) -> tuple[s
     return tuple(key for key in priority if QUESTIONS[key][0] not in facts | absent)
 
 
-def render(assessment: Assessment, question: str | None = None) -> str:
-    """Actionable, non-hallucinated guidance from validated facts and rules."""
+def render(
+    assessment: Assessment,
+    question: str | None = None,
+    *,
+    context_note: str = "",
+    follow_up: bool = False,
+) -> str:
+    """Compose brief, grounded replies without delegating risk or advice to an LLM."""
     if assessment.risk == Risk.HIGH:
+        if context_note:
+            if follow_up:
+                # Avoid announcing the same scam category on every follow-up.
+                advice = assessment.rules[0].advice
+                return f"Entendi: {context_note}. Por segurança, {advice[0].lower() + advice[1:]}"
+            advice = " ".join(dict.fromkeys(rule.advice for rule in assessment.rules[:2]))
+            return f"⚠️ Pelo que você contou, {context_note}. Isso pode ser golpe. {advice}"
+        if follow_up:
+            return (
+                "Sobre esse caso, minha orientação continua: "
+                + assessment.rules[0].advice
+                + " Se algo mudou, me conte o que aconteceu."
+            )
         lines = ["⚠️ Atenção, encontrei sinais de um possível golpe."]
         for matched in assessment.rules[:2]:
             lines.append(f"{matched.conclusion}. {matched.advice}")
         return "\n".join(lines)
 
     if assessment.risk == Risk.MODERATE:
-        if Fact.URGENCY in assessment.facts:
-            intro = "Pediram pressa, e isso merece cuidado."
+        if context_note:
+            intro = f"🤔 Pelo que você contou, {context_note}."
+        elif Fact.URGENCY in assessment.facts:
+            intro = "🤔 Pediram pressa, e isso merece cuidado."
         elif Fact.SUSPICIOUS_URL in assessment.facts or Fact.LINK in assessment.facts:
-            intro = "Esse link merece cuidado antes de abrir."
+            intro = "🤔 Esse link merece cuidado antes de abrir."
         elif Fact.UNKNOWN_SENDER in assessment.facts:
-            intro = "Ainda não sabemos se esse contato é confiável."
+            intro = "🤔 Ainda não sabemos se esse contato é confiável."
         elif Fact.ADVANCE in assessment.facts:
-            intro = "Um pagamento antecipado merece atenção."
+            intro = "🤔 Um pagamento antecipado merece atenção."
         else:
-            intro = "Percebi um possível sinal de alerta."
+            intro = "🤔 Percebi um possível sinal de alerta."
         if question in QUESTIONS:
-            return f"🤔 {intro} {QUESTIONS[question][1]}"
-        return f"🤔 {intro} Confirme a situação por um canal oficial antes de agir."
+            return f"{intro} {QUESTIONS[question][1]}"
+        return f"{intro} Confirme a situação por um canal oficial antes de agir."
+
+    if context_note:
+        intro = f"Entendi que {context_note}, mas ainda faltam detalhes."
+        if question in QUESTIONS:
+            return f"{intro} {QUESTIONS[question][1]}"
+        return f"{intro} Pode me contar exatamente o que foi pedido?"
 
     if question in QUESTIONS:
         return (
