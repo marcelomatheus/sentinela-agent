@@ -3,9 +3,10 @@ import logging
 import time
 
 from sentinela.application.analyze import AnalyzeMessage
+from sentinela.application.errors import ExtractionFormatError
 from sentinela.application.ports import Messenger
 from sentinela.config import get_settings
-from sentinela.domain.guardrails import INVALID, LIMIT, Policy
+from sentinela.domain.guardrails import FORMAT_UNAVAILABLE, INVALID, LIMIT, Policy, TEMPORARY_UNAVAILABLE
 from sentinela.infrastructure.ai import AgnoSpecialist, OpenAITranscriber
 from sentinela.infrastructure.evolution import Evolution
 from sentinela.infrastructure.postgres import Job, Store
@@ -52,6 +53,12 @@ def process_job(job: Job, store: Store, messenger: Messenger, use_case: AnalyzeM
 
         result = use_case.execute(job.message, session)
         store.save_result(job, result.session, result.response)
+    except ExtractionFormatError:
+        log.warning("model_schema_unavailable job=%s", job.id)
+        if session is not None:
+            store.save_result(job, session, FORMAT_UNAVAILABLE)
+        else:
+            store.retry(job, "ExtractionFormatError")
     except ValueError as exc:
         log.warning("invalid_message job=%s error=%s", job.id, type(exc).__name__)
         if session is not None:
@@ -60,7 +67,15 @@ def process_job(job: Job, store: Store, messenger: Messenger, use_case: AnalyzeM
             store.retry(job, type(exc).__name__)
     except Exception as exc:
         log.warning("analysis_failed job=%s error=%s", job.id, type(exc).__name__)
-        store.retry(job, type(exc).__name__)
+        if session is not None and job.attempts >= 3:
+            # Give a truthful, bounded failure response instead of silently
+            # failing after all retries. Never claim to have assessed a risk.
+            try:
+                store.save_result(job, session, TEMPORARY_UNAVAILABLE)
+            except Exception:
+                store.retry(job, type(exc).__name__)
+        else:
+            store.retry(job, type(exc).__name__)
     finally:
         if presence_attempted:
             try:

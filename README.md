@@ -46,6 +46,31 @@ A partir daí, texto, fotos, áudios e `/nova` seguem o pipeline de inferência.
 
 Mensagens seguintes são ignoradas até nova ativação, quando uma **nova sessão** é criada e fatos/perguntas anteriores são apagados. O estado fica persistido por `(instance, wid)` em `app.sessions.active`, com padrão `false`. A transição e a resposta pendente são gravadas na mesma transação PostgreSQL; os comandos e mensagens ignoradas não gastam cota de inferência nem chamam a OpenAI. Confira [docs/optin-deploy.md](docs/optin-deploy.md).
 
+## Treino seguro na conversa consigo mesmo
+
+O webhook normalmente ignora mensagens com `key.fromMe=true` para não responder ao próprio bot. Para fazer testes **somente na conversa consigo mesmo**, configure o JID **exato e completo** em `SELF_TEST_JID` no `.env`:
+
+```dotenv
+# Exemplo ilustrativo: substitua pelo JID real retornado pela Evolution
+SELF_TEST_JID=5511999999999@s.whatsapp.net
+```
+
+A variável é opcional e vazia por padrão. O webhook aceita apenas o JID autorizado (`@s.whatsapp.net` ou `@lid`) com `fromMe=true`. Outras conversas enviadas pela própria conta continuam ignoradas. Para **texto enviado por você**, inclua o prefixo `/treino`, que é removido antes da análise:
+
+```text
+/treino Sentinela
+/treino Recebi um SMS pedindo código para liberar minha conta
+/treino Encerrar
+```
+
+Depois da ativação, fotos e áudios enviados nessa conversa também podem ser analisados sem prefixo. O bot responde por texto **sem `/treino`**: os próprios eventos de saída são descartados pelo webhook, evitando loop. Uma pessoa externa não consegue ativar o modo: a configuração filtra pela identidade completa do chat e continua exigindo a chave `apikey` no webhook. O estado de ativação e as cotas continuam sendo controlados por contato e instância.
+
+**Para encontrar o JID real**, consulte a configuração/metadata autorizada da Evolution, sem publicar números ou credenciais. Não confunda `@lid` e `@s.whatsapp.net` e não configure uma conversa de outra pessoa. Em instalações Evolution distintas, valide o campo `key.remoteJid` entregue pelo webhook: alguns eventos próprios podem não ser emitidos ou expor JIDs diferentes. Se não houver evento de mensagens próprias, será necessário habilitá-lo na instância Evolution. Após atualizar o `.env`, recrie os containers `api` e `worker` (o filtro está no `api`) e teste usando um caso sintético.
+
+### Respostas quando faltam dados ou há falhas
+
+Se a mensagem não trouxer indícios suficientes, o Sentinela seleciona perguntas conforme os fatos presentes: banco → possível pedido de código; transferência → origem do contato; loja ou vaga → adiantamento. Não inventa uma classificação. Quando nem o conteúdo do pedido é identificado, solicita a mensagem original ou mais contexto. Saídas inválidas da IA são distinguidas de entrada inválida; falhas técnicas após retries recebem um aviso curto que não afirma ter detectado golpe. Os erros são registrados com códigos técnicos, sem inserir mensagens do usuário no log.
+
 ## Executar na VPS
 
 Pré-requisitos: Docker Engine + Compose v2, instância Evolution API v2 existente com suporte a headers personalizados e chave OpenAI. **Na mesma VPS, não há necessidade de expor o webhook publicamente:** use a rede Docker compartilhada. Quando a Evolution estiver fora da rede privada, use um proxy HTTPS. O Postgres não publica portas. A API está vinculada a `127.0.0.1:8080` por padrão; se o proxy for um container, conecte os serviços à rede privada dele e aponte para `api:8080` (não use localhost de outro container).

@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from sentinela.application.ports import Extractor, Messenger, QuestionAgent, Reputation, Transcriber
-from sentinela.domain.guardrails import INVALID, OUT_OF_SCOPE, Policy
+from sentinela.domain.guardrails import CONFLICTING, OUT_OF_SCOPE, Policy
 from sentinela.domain.inference import infer, question_options, render
 from sentinela.domain.model import EXTERNAL_FACTS, Kind, Media, Message, Session
 
@@ -47,10 +47,10 @@ class AnalyzeMessage:
         if not observed.in_scope:
             return AnalysisResult(session, OUT_OF_SCOPE)
         if observed.present & observed.absent:
-            return AnalysisResult(session, INVALID)
+            return AnalysisResult(session, CONFLICTING)
         previous = session.facts if observed.continues_previous else frozenset()
         if not observed.continues_previous and (session.facts or session.absent or session.last_question):
-            session = replace(session, session_id=uuid4(), absent=frozenset(), last_question=None)
+            session = replace(session, session_id=uuid4(), absent=frozenset(), last_question=None, asked_questions=frozenset())
         present = observed.present - EXTERNAL_FACTS
         absent = observed.absent - EXTERNAL_FACTS
         facts = (previous - absent) | present | self.reputation.inspect(text)

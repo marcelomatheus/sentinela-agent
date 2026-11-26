@@ -60,27 +60,54 @@ QUESTIONS: dict[str, tuple[Fact, str]] = {
 def question_options(assessment: Assessment, absent: frozenset[Fact]) -> tuple[str, ...]:
     if assessment.risk == Risk.HIGH:
         return ()
-    return tuple(k for k, (f, _) in QUESTIONS.items() if f not in assessment.facts | absent)
+    # Prioritize what is missing *for this case*, not the same OTP question
+    # for every vague message.
+    facts = assessment.facts
+    if Fact.BANK in facts or Fact.FAMILY in facts:
+        priority = ("code", "origin", "money", "advance")
+    elif Fact.MONEY in facts or Fact.INVESTMENT in facts:
+        priority = ("origin", "advance", "code", "money")
+    elif Fact.SHOP in facts or Fact.PRIZE in facts or Fact.JOB in facts:
+        priority = ("advance", "origin", "money", "code")
+    else:
+        priority = ("money", "origin", "code", "advance")
+    return tuple(key for key in priority if QUESTIONS[key][0] not in facts | absent)
 
 
 def render(assessment: Assessment, question: str | None = None) -> str:
-    """Short and friendly messages composed from trusted rule content.
-
-    Full rule details stay in the domain; only up to two concise, actionable
-    findings are shown to the person, without raw model prose or IDs.
-    """
+    """Actionable, non-hallucinated guidance from validated facts and rules."""
     if assessment.risk == Risk.HIGH:
         lines = ["⚠️ Atenção, encontrei sinais de um possível golpe."]
         for matched in assessment.rules[:2]:
             lines.append(f"{matched.conclusion}. {matched.advice}")
-    elif assessment.risk == Risk.MODERATE:
-        lines = ["🤔 Vejo alguns sinais de alerta, mas ainda preciso entender melhor."]
-    else:
-        lines = ["Ainda tenho poucas informações para avaliar. 🙂"]
+        return "\n".join(lines)
 
-    if question is not None and question in QUESTIONS:
-        lines.append(QUESTIONS[question][1])
-    elif assessment.risk != Risk.HIGH:
-        lines.append("Por segurança, não clique em links nem envie códigos ou senhas.")
+    if assessment.risk == Risk.MODERATE:
+        if Fact.URGENCY in assessment.facts:
+            intro = "Pediram pressa, e isso merece cuidado."
+        elif Fact.SUSPICIOUS_URL in assessment.facts or Fact.LINK in assessment.facts:
+            intro = "Esse link merece cuidado antes de abrir."
+        elif Fact.UNKNOWN_SENDER in assessment.facts:
+            intro = "Ainda não sabemos se esse contato é confiável."
+        elif Fact.ADVANCE in assessment.facts:
+            intro = "Um pagamento antecipado merece atenção."
+        else:
+            intro = "Percebi um possível sinal de alerta."
+        if question in QUESTIONS:
+            return f"🤔 {intro} {QUESTIONS[question][1]}"
+        return f"🤔 {intro} Confirme a situação por um canal oficial antes de agir."
 
-    return "\n".join(lines)
+    if question in QUESTIONS:
+        return (
+            "Ainda não tenho indícios suficientes para avaliar. "
+            + QUESTIONS[question][1]
+        )
+    if assessment.facts:
+        return (
+            "Entendi parte da situação, mas ainda não dá para concluir. "
+            "Se puder, envie a mensagem completa ou diga exatamente o que pediram."
+        )
+    return (
+        "Não consegui identificar o que o contato pediu. "
+        "Pode copiar a mensagem ou contar o que aconteceu, sem incluir dados pessoais?"
+    )

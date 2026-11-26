@@ -1,4 +1,5 @@
 from functools import lru_cache
+import re
 
 from pydantic import Field, HttpUrl, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,7 @@ class Settings(BaseSettings):
     evolution_api_url: HttpUrl
     evolution_api_key: SecretStr
     evolution_instance: str = Field(min_length=1, max_length=80)
+    self_test_jid: str | None = None
     openai_api_key: SecretStr
     openai_model: str = "gpt-5.4-mini"
     openai_transcription_model: str = "gpt-transcribe"
@@ -39,6 +41,15 @@ class Settings(BaseSettings):
     guard_max_output_tokens: int = Field(default=768, ge=256, le=2048)
     guard_timeout_seconds: int = Field(default=25, ge=5, le=60)
     guard_audio_max_bytes: int = Field(default=500000, ge=10000, le=1000000)
+
+    @field_validator("self_test_jid")
+    @classmethod
+    def validate_self_test_jid(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if re.fullmatch(r"[0-9]{8,25}@(s\.whatsapp\.net|lid)", value) is None:
+            raise ValueError("SELF_TEST_JID deve ser um JID individual completo e confiável")
+        return value
 
     @field_validator("evolution_instance")
     @classmethod
