@@ -46,6 +46,11 @@ services:
       db: {condition: service_healthy}
     restart: unless-stopped
     stop_grace_period: 180s
+    # Worker also sends media, messages and presence to the Evolution API.
+    # It must resolve the Evolution container on the same shared network.
+    networks:
+      - default
+      - whatsapp_internal
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
 volumes:
