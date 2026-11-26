@@ -1,6 +1,9 @@
 FROM python:3.15.2-slim AS build
 ENV POETRY_VERSION=2.2.1 POETRY_NO_INTERACTION=1 POETRY_VIRTUALENVS_IN_PROJECT=true
 WORKDIR /app
+# Python 3.15 may require native builds (e.g. zstandard from Poetry deps).
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir "poetry==$POETRY_VERSION"
 COPY pyproject.toml poetry.lock* ./
 # O lock deve ser gerado e versionado antes de um deploy reproduzível.

@@ -29,6 +29,10 @@ class Store:
         # Idempotent migration, also applied on existing VPS volumes.
         with self.connect() as conn:
             conn.execute("ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS asked_questions jsonb NOT NULL DEFAULT '[]'")
+            conn.execute("""CREATE INDEX IF NOT EXISTS inbox_sender_open_idx ON app.inbox(instance,wid,id)
+                WHERE status IN ('pending','processing','ready','sending')""")
+            conn.execute("""CREATE INDEX IF NOT EXISTS inbox_terminal_retention_idx ON app.inbox(updated_at)
+                WHERE status IN ('done','failed','uncertain')""")
             conn.execute("""CREATE TABLE IF NOT EXISTS app.guard_budget (
                 day date NOT NULL, scope text NOT NULL, used integer NOT NULL DEFAULT 0,
                 PRIMARY KEY(day,scope))""")
@@ -50,6 +54,18 @@ class Store:
                 conn.execute("""UPDATE app.guard_budget SET used=used+1
                     WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s""",(scope,))
             return True
+
+    def prune(self, *, days: int = 7) -> int:
+        """Remove terminal inbox rows and expired quota counters."""
+        if days < 1:
+            raise ValueError("retention must be positive")
+        with self.connect() as conn:
+            deleted = conn.execute("""DELETE FROM app.inbox
+                WHERE status IN ('done','failed','uncertain')
+                AND updated_at < now() - (%s * interval '1 day')""", (days,))
+            conn.execute("""DELETE FROM app.guard_budget
+                WHERE day < (now() AT TIME ZONE 'UTC')::date - interval '31 days'""")
+            return deleted.rowcount
 
     def ready(self) -> None:
         with self.connect() as conn:

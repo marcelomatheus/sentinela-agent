@@ -40,7 +40,10 @@ class UrlReputation:
                     except ValueError:
                         pass
                     if not host.endswith((".local",".internal",".localhost")):
-                        candidates.append(f"{p.scheme}://{host}/")
+                        # Keep the path for reputation matching but redact URL query/fragment.
+                        # This trades some coverage for privacy.
+                        path = p.path if p.path.startswith("/") else "/"
+                        candidates.append(f"{p.scheme}://{host}{path}")
             except ValueError:
                 continue
         if self.api_key and candidates:

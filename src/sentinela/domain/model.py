@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 from enum import StrEnum
 from uuid import UUID
 
@@ -44,6 +45,7 @@ class Message:
     text: str = ""
     media_mime: str = ""
     remote_jid: str = ""
+    media_envelope: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

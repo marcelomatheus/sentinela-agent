@@ -23,3 +23,8 @@ CREATE TABLE IF NOT EXISTS app.guard_budget (
   day date NOT NULL, scope text NOT NULL, used integer NOT NULL DEFAULT 0,
   PRIMARY KEY(day,scope)
 );
+
+CREATE INDEX IF NOT EXISTS inbox_sender_open_idx ON app.inbox(instance,wid,id)
+WHERE status IN ('pending','processing','ready','sending');
+CREATE INDEX IF NOT EXISTS inbox_terminal_retention_idx ON app.inbox(updated_at)
+WHERE status IN ('done','failed','uncertain');

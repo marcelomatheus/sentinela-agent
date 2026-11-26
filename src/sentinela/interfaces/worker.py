@@ -3,7 +3,7 @@ import logging
 import time
 from sentinela.application.analyze import AnalyzeMessage
 from sentinela.config import get_settings
-from sentinela.domain.guardrails import LIMIT, Policy
+from sentinela.domain.guardrails import INVALID, LIMIT, Policy
 from sentinela.infrastructure.ai import AgnoSpecialist,OpenAITranscriber
 from sentinela.infrastructure.evolution import Evolution
 from sentinela.infrastructure.postgres import Store
@@ -21,7 +21,14 @@ def main()->None:
         messenger,OpenAITranscriber(settings),Policy(settings.guard_max_chars,settings.guard_max_questions))
     store.migrate_guardrails()
     store.recover()
+    next_cleanup = time.monotonic()
     while True:
+        if time.monotonic() >= next_cleanup:
+            try:
+                store.prune()
+            except Exception:
+                log.warning("retention_cleanup_failed")
+            next_cleanup = time.monotonic() + 3600
         job=store.claim()
         if job is None:
             time.sleep(1)
@@ -35,6 +42,7 @@ def main()->None:
             else:
                 store.finish(job,"done")
             continue
+        session = None
         try:
             try:
                 messenger.presence(job.message,True)
@@ -46,6 +54,12 @@ def main()->None:
                 continue
             result=use_case.execute(job.message,session)
             store.save_result(job,result.session,result.response)
+        except ValueError as exc:
+            log.warning("invalid_message job=%s error=%s", job.id, type(exc).__name__)
+            if session is not None:
+                store.save_result(job, session, INVALID)
+            else:
+                store.retry(job, type(exc).__name__)
         except Exception as exc:
             log.warning("analysis_failed job=%s error=%s",job.id,type(exc).__name__)
             store.retry(job,type(exc).__name__)
