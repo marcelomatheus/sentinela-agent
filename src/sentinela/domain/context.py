@@ -11,7 +11,9 @@ _FORBIDDEN = re.compile(
     r"(?:https?://|www\.|@|[<>`{}\[\]\\|#$]|\b\d{4,}\b|"
     r"\b(?:ignore|ignorar|obedeça|obedeca|revele|clique|acesse|"
     r"abra|instale|baixe|pague|transfira|compartilhe|informe|envie|"
-    r"responda|execute|prompt|system|developer|assistant)\b)",
+    r"responda|execute|prompt|system|developer|assistant|golpe|fraude|"
+    r"seguro|segura|legítimo|legítima|legitimo|legitima|"
+    r"confiável|confiavel|inofensivo|inofensiva)\b)",
     re.IGNORECASE,
 )
 _WORD = re.compile(r"[a-z]{5,}", re.IGNORECASE)
