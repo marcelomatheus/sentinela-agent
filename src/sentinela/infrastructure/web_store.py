@@ -38,6 +38,9 @@ class WebStore:
     def migrate(self) -> None:
         script = Path(__file__).resolve().parents[3] / "db" / "002_web.sql"
         with self.connect() as conn:
+            # API and workers can start together. Serialize DDL across
+            # processes before applying the idempotent migration script.
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (718204101,))
             conn.execute(script.read_text(encoding="utf-8"))
 
     @staticmethod
