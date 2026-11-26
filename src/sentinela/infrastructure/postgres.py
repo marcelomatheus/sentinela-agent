@@ -29,6 +29,10 @@ class Store:
         # Idempotent migration, also applied on existing VPS volumes.
         with self.connect() as conn:
             conn.execute("ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS asked_questions jsonb NOT NULL DEFAULT '[]'")
+            conn.execute("""CREATE INDEX IF NOT EXISTS inbox_sender_open_idx ON app.inbox(instance,wid,id)
+                WHERE status IN ('pending','processing','ready','sending')""")
+            conn.execute("""CREATE INDEX IF NOT EXISTS inbox_terminal_retention_idx ON app.inbox(updated_at)
+                WHERE status IN ('done','failed','uncertain')""")
             conn.execute("""CREATE TABLE IF NOT EXISTS app.guard_budget (
                 day date NOT NULL, scope text NOT NULL, used integer NOT NULL DEFAULT 0,
                 PRIMARY KEY(day,scope))""")
