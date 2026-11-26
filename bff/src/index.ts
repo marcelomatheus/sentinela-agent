@@ -7,7 +7,6 @@ import fastifyStatic from "@fastify/static";
 import * as oidc from "openid-client";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { once } from "node:events";
 import { z } from "zod";
 
 import { readConfig, type BffConfig } from "./config";
@@ -271,7 +270,18 @@ export async function createBff(config: BffConfig = readConfig()) {
       try {
         for await (const chunk of upstream.body) {
           if(controller.signal.aborted)break;
-          if(!reply.raw.write(Buffer.from(chunk)))await once(reply.raw,"drain");
+          if(!reply.raw.write(Buffer.from(chunk))){
+            await new Promise<void>(resolve=>{
+              const done=()=>{
+                reply.raw.off("drain",done);
+                reply.raw.off("close",done);
+                resolve();
+              };
+              if(reply.raw.destroyed){resolve();return;}
+              reply.raw.once("drain",done);
+              reply.raw.once("close",done);
+            });
+          }
         }
       }catch{
         app.log.warn("SSE upstream disconnected");
