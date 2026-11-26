@@ -257,7 +257,7 @@ export async function createBff(config: BffConfig = readConfig()) {
     reply.raw.on("close",close);
     try {
       const upstream=await proxy(
-        user,"GET",/`conversations/${params.id}/events?after=${after}`,
+        user,"GET",`/conversations/${params.id}/events?after=${after}`,
         undefined,undefined,true,controller.signal,
       );
       if (!upstream.ok || !upstream.body) return forward(reply,upstream);
