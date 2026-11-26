@@ -54,3 +54,23 @@ Ainda é necessária validação real de login OIDC, uploads por navegadores dif
 `web/src/app` contém a aplicação e estilos globais; `features/home`, `features/chat` e `features/conversations` encapsulam UI e estado da feature; `lib/api` é o limite de contrato com o BFF, validado por Zod. Não são importadas regras Python no frontend.
 
 A home usa objeto iridescente CSS e tipografia editorial, baseada em referências visuais, sem imagens pesadas nem WebGL. O chat usa navegação lateral, compositor destacado, suporte a teclado, aria-labels, mídia e estados SSE. `prefers-reduced-motion` desativa animações.
+
+
+## Revisão de robustez do PR #9 — 26/11/2026
+
+Após uma auditoria de gargalos, bugs e segurança, o código foi alterado para:
+
+- Copiar o diretório db para a imagem Python. O smoke do perfil web deve validar a migração com PostgreSQL descartável.
+- Tornar a reserva de quota idempotente por job, inclusive em retries. Saudações, agradecimentos e /nova não gastam quota de inferência.
+- Atribuir risco à resposta atual, não aos fatos antigos da sessão. Saudações e erros retornam risco nulo.
+- Seguir ordem de bloqueio conversa → job em claim, reset, conclusão e falha. Leases perdidos três vezes terminam com status failed.
+- Despertar SSE por LISTEN/NOTIFY em um listener compartilhado por processo, com eventos duráveis e recuperação por fallback de 15 segundos. O frontend usa cursor da consulta inicial para evitar replay histórico.
+- Limitar requisições, mutações e conexões SSE por instância BFF; limites globais distribuídos ainda exigem Redis ou equivalente quando houver réplicas.
+- Assinar método, rota, query, corpo, identidade, nonce e timestamp nas solicitações internas BFF → FastAPI. Nonces de mutação são usados uma única vez e expiram após três minutos.
+- Alinhar áudios em 500 KB no React, BFF, FastAPI e transcrição.
+- Reconciliar arquivos sem metadados, com retenção configurável de conversas após 90 dias sem atividade (WEB_RETENTION_DAYS, 7 a 365); jobs terminais após 30 dias, eventos após 14 dias e anexos não utilizados após um dia.
+- Adicionar testes PostgreSQL de concorrência real, retries, isolamento, recuperação, notificações e limpeza, além de testes HTTP Fastify e boot Docker.
+
+### Limites ainda dependentes da VPS
+
+A CI não substitui testes manuais com provedor OIDC real, OpenAI e Evolution nem benchmark de carga. LISTEN/NOTIFY é apenas uma notificação: a fonte durável permanece na tabela de eventos. O volume local exige armazenamento compartilhado privado antes de qualquer implantação multi-host.
