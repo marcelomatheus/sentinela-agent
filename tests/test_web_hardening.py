@@ -229,3 +229,24 @@ def test_filesystem_reconciliation_and_retention(store: WebStore, tmp_path: Path
     assert keep in deleted
     assert store.reconcile_files(str(tmp_path),min_age_seconds=3600)==1
     assert not keep_file.exists()
+
+
+def test_exhausted_expired_lease_is_marked_failed(store: WebStore) -> None:
+    conversation=open_case(store)
+    submit(store,conversation)
+    job=store.claim()
+    assert job is not None
+    with store.connect() as conn:
+        conn.execute(
+            """UPDATE app.web_jobs
+               SET attempts=3, lease_until=now()-interval '1 second'
+               WHERE id=%s""", (job.id,),
+        )
+    store.recover()
+    with store.connect() as conn:
+        state=conn.execute(
+            "SELECT status,error_code FROM app.web_jobs WHERE id=%s", (job.id,),
+        ).fetchone()
+    assert state["status"]=="failed" and state["error_code"]=="lease_expired"
+    assert store.claim() is None
+    assert any(event["kind"]=="failed" for event in store.events(OWNER,conversation,0))
