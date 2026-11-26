@@ -80,3 +80,12 @@ CREATE INDEX IF NOT EXISTS web_jobs_lease_idx ON app.web_jobs(lease_until)
 
 -- Compatible with installations that already ran the initial web migration.
 ALTER TABLE app.web_jobs ADD COLUMN IF NOT EXISTS quota_reserved boolean NOT NULL DEFAULT false;
+
+
+-- Replay protection for signed internal BFF requests. Removed after expiration.
+CREATE TABLE IF NOT EXISTS app.web_request_nonces (
+  id uuid PRIMARY KEY,
+  used_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS web_request_nonces_retention_idx
+  ON app.web_request_nonces(used_at);

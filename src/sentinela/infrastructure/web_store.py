@@ -222,6 +222,16 @@ class WebStore:
             ).fetchall()
         return [{"id": row["id"], "kind": row["kind"], "payload": row["payload"]} for row in rows]
 
+    def consume_nonce(self, nonce: UUID) -> bool:
+        """Mutating internal requests are authenticated exactly once."""
+        with self.connect() as conn:
+            row = conn.execute(
+                """INSERT INTO app.web_request_nonces(id) VALUES(%s)
+                   ON CONFLICT DO NOTHING RETURNING id""",
+                (nonce,),
+            ).fetchone()
+            return row is not None
+
     def prune_orphans(self) -> list[UUID]:
         with self.connect() as conn:
             rows=conn.execute(
@@ -231,6 +241,7 @@ class WebStore:
                    RETURNING id"""
             ).fetchall()
             conn.execute("DELETE FROM app.web_events WHERE created_at<now()-interval '14 days'")
+            conn.execute("DELETE FROM app.web_request_nonces WHERE used_at<now()-interval '3 minutes'")
             return [row["id"] for row in rows]
 
     def recover(self) -> None:

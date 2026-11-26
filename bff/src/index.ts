@@ -77,12 +77,16 @@ export async function createBff(config: BffConfig = readConfig()) {
     user: Identity, method: string, path: string,
     payload?: BodyInit, mime?: string, stream = false,
   ): Promise<Response> {
+    const url = new URL("/internal/web" + path, config.SENTINELA_INTERNAL_URL);
+    const content = typeof payload === "string" ? payload
+      : payload instanceof Uint8Array ? payload : "";
     const response = await fetch(
-      new URL("/internal/web" + path, config.SENTINELA_INTERNAL_URL),
+      url,
       {
         method,
         headers: {
-          ...internalHeaders(user.principal, config.WEB_INTERNAL_KEY),
+          ...internalHeaders(user.principal, config.WEB_INTERNAL_KEY,
+            Math.floor(Date.now() / 1000), method, url.pathname + url.search, content),
           ...(mime ? {"content-type":mime} : {}),
         },
         body: payload,

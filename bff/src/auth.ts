@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { EncryptJWT, jwtDecrypt } from "jose";
 import { z } from "zod";
 
@@ -52,13 +52,22 @@ export function principalOf(issuer: string, subject: string): string {
   return createHash("sha256").update(issuer + "\n" + subject).digest("hex");
 }
 
-export function internalHeaders(principal: string, secret: string, now = Math.floor(Date.now() / 1000)): Record<string, string> {
+export function internalHeaders(
+  principal: string, secret: string,
+  now = Math.floor(Date.now() / 1000),
+  method = "GET", path = "/",
+  body: string | Uint8Array = "",
+  nonce = randomUUID(),
+): Record<string, string> {
   const timestamp = String(now);
-  const signature = createHmac("sha256", secret)
-    .update(principal + "\n" + timestamp).digest("hex");
+  const digest = createHash("sha256").update(body).digest("hex");
+  const canonical = [principal, timestamp, nonce, method.toUpperCase(), path, digest].join("\n");
+  const signature = createHmac("sha256", secret).update(canonical).digest("hex");
   return {
     "x-sentinela-principal": principal,
     "x-sentinela-timestamp": timestamp,
+    "x-sentinela-nonce": nonce,
+    "x-sentinela-body-sha256": digest,
     "x-sentinela-signature": signature,
   };
 }
