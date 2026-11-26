@@ -186,6 +186,20 @@ def test_agno_extraction_returns_context_in_existing_model_call(monkeypatch) -> 
     assert calls == ["created", "run"]
 
 
+def test_overlong_summary_does_not_discard_valid_extracted_facts() -> None:
+    from sentinela.infrastructure.ai import Extracted
+
+    extracted = Extracted.model_validate({
+        "present": [Fact.BANK, Fact.OTP],
+        "absent": [],
+        "continues_previous": False,
+        "in_scope": True,
+        "context_note": "o banco " * 50,
+    })
+    assert extracted.present == [Fact.BANK, Fact.OTP]
+    assert safe_context_note(extracted.context_note) == ""
+
+
 def test_followup_without_context_does_not_repeat_rule_list() -> None:
     app, _ = case([
         Observation(frozenset({Fact.BANK, Fact.OTP}), frozenset(), False),
