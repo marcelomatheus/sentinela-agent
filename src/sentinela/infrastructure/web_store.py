@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
-from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from sentinela.config import Settings
