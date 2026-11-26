@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   conversationSchema,messageSchema,mediaSchema,newMessageSchema,sessionSchema,
   type SendMessage,
-} from "../../features/chat/api/schemas";
+} from "./schemas";
 
 export class ApiError extends Error {
   constructor(public readonly status:number,message:string){super(message);}

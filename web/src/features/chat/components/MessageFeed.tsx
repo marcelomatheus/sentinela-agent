@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
-import { AlertTriangle, CheckCircle2, CircleHelp, Copy, LoaderCircle, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CircleHelp, Copy, LoaderCircle, ShieldCheck } from "lucide-react";
 import type { Message } from "../api/schemas";
 
 function RiskTag({risk}:{risk:Message["risk"]}){
   if(!risk)return null;
-  const Icon=risk==="ALTO"?AlertTriangle:risk==="MODERADO"?CircleHelp:CheckCircle2;
+  const Icon=risk==="ALTO"?AlertTriangle:CircleHelp;
   return <span className={`risk-tag risk-${risk.toLowerCase()}`}>
     <Icon size={13}/>{risk==="ALTO"?"Possível golpe":risk==="MODERADO"?"Atenção":"Inconclusivo"}
   </span>;

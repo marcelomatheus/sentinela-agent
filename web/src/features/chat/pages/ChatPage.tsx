@@ -9,7 +9,7 @@ import type { Session, Message } from "../api/schemas";
 import { client } from "../../../lib/api/client";
 import Composer from "../components/Composer";
 import MessageFeed from "../components/MessageFeed";
-import HistorySidebar from "../../conversations/components/HistorySidebar";
+import HistorySidebar from "../../conversations";
 
 type ActiveSession=Extract<Session,{authenticated:true}>;
 

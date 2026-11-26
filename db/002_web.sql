@@ -73,3 +73,6 @@ CREATE TABLE IF NOT EXISTS app.web_events (
 );
 CREATE INDEX IF NOT EXISTS web_events_cursor_idx
   ON app.web_events(conversation_id,id);
+
+CREATE INDEX IF NOT EXISTS web_jobs_lease_idx ON app.web_jobs(lease_until)
+  WHERE status='processing';
