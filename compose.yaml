@@ -20,6 +20,7 @@ services:
     environment: &app_env
       POSTGRES_HOST: db
       AGNO_TELEMETRY: 'false'
+      WEB_MEDIA_DIR: /data/web
     depends_on:
       db: {condition: service_healthy}
     networks:
@@ -27,6 +28,8 @@ services:
       whatsapp_internal:
         aliases:
           - sentinela-api
+    volumes:
+      - web_media:/data/web
     ports:
       - '127.0.0.1:${HTTP_PORT:-8080}:8080'
     healthcheck:
@@ -53,8 +56,41 @@ services:
       - whatsapp_internal
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+  web_worker:
+    profiles: [web]
+    build: .
+    command: [python, -m, sentinela.interfaces.web_worker]
+    env_file: .env
+    environment: *app_env
+    depends_on:
+      db: {condition: service_healthy}
+    volumes:
+      - web_media:/data/web
+    networks: [default]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  bff:
+    profiles: [web]
+    build:
+      context: .
+      dockerfile: bff/Dockerfile
+    env_file: .env
+    environment:
+      SENTINELA_INTERNAL_URL: http://api:8080
+      WEB_DIST: /app/web-dist
+    depends_on:
+      api: {condition: service_healthy}
+    ports:
+      - '127.0.0.1:${BFF_PORT:-3005}:3005'
+    networks: [default]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
 volumes:
   pgdata:
+  web_media:
 
 networks:
   default: {}

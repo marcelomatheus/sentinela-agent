@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     evolution_api_key: SecretStr
     evolution_instance: str = Field(min_length=1, max_length=80)
     self_test_jid: str | None = None
+    web_internal_key: SecretStr = SecretStr("")
+    web_media_dir: str = "/data/web"
     openai_api_key: SecretStr
     openai_model: str = "gpt-5.4-mini"
     openai_transcription_model: str = "gpt-transcribe"
@@ -41,6 +43,14 @@ class Settings(BaseSettings):
     guard_max_output_tokens: int = Field(default=768, ge=256, le=2048)
     guard_timeout_seconds: int = Field(default=25, ge=5, le=60)
     guard_audio_max_bytes: int = Field(default=500000, ge=10000, le=1000000)
+
+    @field_validator("web_internal_key")
+    @classmethod
+    def valid_internal_key(cls, value: SecretStr) -> SecretStr:
+        secret=value.get_secret_value()
+        if secret and len(secret)<32:
+            raise ValueError("WEB_INTERNAL_KEY deve ter pelo menos 32 caracteres")
+        return value
 
     @field_validator("self_test_jid")
     @classmethod

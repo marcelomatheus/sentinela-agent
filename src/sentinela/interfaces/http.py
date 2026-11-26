@@ -59,4 +59,12 @@ def create_app(settings:Settings|None=None, store:Inbox|None=None)->FastAPI:
         except Exception:
             raise HTTPException(503,"inbox unavailable") from None
         return {"status":"accepted" if inserted else "duplicate"}
+    # Web routes are gated by a signed, private BFF identity. When no key is
+    # configured, the WhatsApp-only installation continues unchanged.
+    from sentinela.infrastructure.web_store import WebStore
+    from sentinela.interfaces.web_api import create_web_router
+    web_store=WebStore(config)
+    app.include_router(create_web_router(config,web_store))
+    if len(config.web_internal_key.get_secret_value()) >= 32:
+        app.add_event_handler("startup", web_store.migrate)
     return app

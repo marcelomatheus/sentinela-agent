@@ -59,3 +59,22 @@ jobs:
           assert compose["networks"]["whatsapp_internal"]["external"] is True
           PY
       - run: docker build --pull --tag sentinela:ci .
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+      - name: Install locked Node dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck BFF and React
+        run: npm run typecheck
+      - name: Test frontend and BFF
+        run: npm run test
+      - name: Build frontend and BFF
+        run: npm run build
+      - name: Build BFF production Docker image
+        run: docker build -f bff/Dockerfile -t sentinela-web:ci .
