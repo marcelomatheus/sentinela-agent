@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from sentinela.application.ports import Extractor, Messenger, QuestionAgent, Reputation, Transcriber
-from sentinela.domain.guardrails import CONFLICTING, INVALID, OUT_OF_SCOPE, Policy
+from sentinela.domain.guardrails import CONFLICTING, OUT_OF_SCOPE, Policy
 from sentinela.domain.inference import infer, question_options, render
 from sentinela.domain.model import EXTERNAL_FACTS, Kind, Media, Message, Session
 
