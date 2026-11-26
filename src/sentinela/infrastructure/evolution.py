@@ -29,12 +29,18 @@ class Evolution:
         self._post("message/sendText",message,{"number":message.remote_jid or message.wid,"text":text})
 
     def download(self, message: Message) -> Media:
-        response = self._post("chat/getBase64FromMediaMessage",message,
-            {"message":{"key":{"id":message.message_id,"remoteJid":message.remote_jid,"fromMe":False}},"convertToMp4":False})
+        if message.media_envelope is None:
+            raise ValueError("missing media envelope")
+        response = self._post("chat/getBase64FromMediaMessage", message,
+            {"message": message.media_envelope, "convertToMp4": False})
         if len(response.content)>self.settings.max_media_bytes*2:
             raise ValueError("media too large")
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("invalid media response")
         encoded = payload.get("base64")
+        if encoded is None and isinstance(payload.get("data"), dict):
+            encoded = payload["data"].get("base64")
         if not isinstance(encoded,str):
             raise ValueError("missing media")
         if encoded.startswith("data:"):

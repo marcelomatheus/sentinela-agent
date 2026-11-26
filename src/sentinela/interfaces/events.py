@@ -1,5 +1,6 @@
 """Contratos de entrada: apenas eventos de conversas individuais."""
 from typing import Any
+import re
 from pydantic import BaseModel, ConfigDict, Field
 from sentinela.domain.model import Kind, Message
 
@@ -27,7 +28,7 @@ def parse_message(event: Event) -> Message | None:
     identity = jid
     local, _, server = identity.partition("@")
     number = local.split(":")[0]
-    if not __import__("re").fullmatch(r"[0-9]+(?::[0-9]+)?", local):
+    if not re.fullmatch(r"[0-9]+(?::[0-9]+)?", local):
         raise ValueError("invalid sender format")
     if not number.isascii() or not number.isdigit() or len(number) > 25:
         raise ValueError("invalid sender")
@@ -35,6 +36,14 @@ def parse_message(event: Event) -> Message | None:
     body = data.get("message")
     if not isinstance(body, dict):
         return None
+    original = body
+    for _ in range(3):
+        wrapper = next((body.get(k) for k in ("ephemeralMessage", "viewOnceMessage",
+            "viewOnceMessageV2", "viewOnceMessageV2Extension")
+            if isinstance(body.get(k), dict)), None)
+        if wrapper is None or not isinstance(wrapper.get("message"), dict):
+            break
+        body = wrapper["message"]
     if isinstance(body.get("conversation"), str):
         return Message(event.instance, mid, wid, Kind.TEXT, body["conversation"][:12000], remote_jid=jid)
     for name, kind in (("extendedTextMessage", Kind.TEXT), ("imageMessage", Kind.IMAGE), ("audioMessage", Kind.AUDIO)):
@@ -43,5 +52,7 @@ def parse_message(event: Event) -> Message | None:
             text = part.get("text" if kind == Kind.TEXT else "caption", "")
             mime = part.get("mimetype", "")
             return Message(event.instance, mid, wid, kind, text[:12000] if isinstance(text, str) else "",
-                           mime[:100] if isinstance(mime, str) else "", jid)
+                           mime[:100] if isinstance(mime, str) else "", jid,
+                           {"key": {"id": mid, "remoteJid": jid, "fromMe": False},
+                            "message": original} if kind != Kind.TEXT else None)
     return None

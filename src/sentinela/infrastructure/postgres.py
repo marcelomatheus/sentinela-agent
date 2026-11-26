@@ -51,6 +51,18 @@ class Store:
                     WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s""",(scope,))
             return True
 
+    def prune(self, *, days: int = 7) -> int:
+        """Remove terminal inbox rows and expired quota counters."""
+        if days < 1:
+            raise ValueError("retention must be positive")
+        with self.connect() as conn:
+            deleted = conn.execute("""DELETE FROM app.inbox
+                WHERE status IN ('done','failed','uncertain')
+                AND updated_at < now() - (%s * interval '1 day')""", (days,))
+            conn.execute("""DELETE FROM app.guard_budget
+                WHERE day < (now() AT TIME ZONE 'UTC')::date - interval '31 days'""")
+            return deleted.rowcount
+
     def ready(self) -> None:
         with self.connect() as conn:
             conn.execute("SELECT 1 FROM app.inbox LIMIT 1")

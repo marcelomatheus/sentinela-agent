@@ -22,6 +22,10 @@ class Policy:
         normalized = " ".join(normalized.split())
         if normalized in {"oi", "ola", "bom dia", "boa tarde", "boa noite", "quem e voce", "quem e voce?", "/ajuda", "/help"}:
             return IDENTITY
-        if re.search(r"(ignore|esqueca|desconsidere|override|disregard|forget).{0,45}(instruc|prompt|regra|system|previous)|(?:revele|mostre|exiba|print|dump|reveal).{0,60}(?:prompt|system message|api.?key|chave|outro usuario|other user|historico de terceiros)|(?:jailbreak|developer mode|modo desenvolvedor)", normalized):
+        # Only intercept direct requests to override the bot. Quoted scam
+        # evidence must be analyzed, not discarded as an injection attempt.
+        direct = re.match(r"^(?:sentinela[, :]\s*)?(?:ignore|esqueca|desconsidere|override|disregard|forget|revele|mostre|exiba|print|dump|reveal)\b", normalized)
+        target = re.search(r"(?:instruc|prompt|system|developer|chave|api.?key|outro usuario|other user|historico)", normalized)
+        if direct and target:
             return BLOCKED
         return None

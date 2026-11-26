@@ -44,7 +44,8 @@ class AgnoSpecialist:
     def _model(self) -> OpenAIChat:
         s = self.settings
         return OpenAIChat(id=s.openai_model, api_key=s.openai_api_key.get_secret_value(),
-            max_completion_tokens=s.guard_max_output_tokens, timeout=s.guard_timeout_seconds, max_retries=0)
+            max_completion_tokens=s.guard_max_output_tokens, timeout=s.guard_timeout_seconds,
+            max_retries=0, retry_with_guidance=False)
 
     def extract(self, text: str, image: Media | None, session: Session) -> Observation:
         if len(text) > self.settings.guard_max_chars:
