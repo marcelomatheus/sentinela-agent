@@ -32,3 +32,18 @@
 - https://www.python.org/downloads/
 
 A CI é teste automatizado, não substitui testes de integração externa.
+
+## Verificação das versões publicadas em 25/11/2026
+| Tecnologia | Versão recente publicada | Compatibilidade declarada no projeto |
+|---|---|---|
+| Python | 3.15.2 | >=3.15,<3.16 |
+| Agno | 3.2.1 | ==3.2.1 |
+| OpenAI SDK | 3.59.0 | >=3.59,<4 (atualizado neste PR) |
+| FastAPI | 0.165.0 | >=0.115,<1 |
+| Pydantic | 2.14.4 | >=2.11,<3 |
+| SQLAlchemy | 2.1.9 | >=2.0,<3, com extra asyncio |
+| Psycopg | 3.3.9 | >=3.2,<4 |
+
+Fontes: https://pypi.org/project/agno/ , https://pypi.org/project/openai/ , https://pypi.org/project/fastapi/ , https://pypi.org/project/pydantic/ , https://pypi.org/project/SQLAlchemy/ e https://pypi.org/project/psycopg/ .
+
+**Limitação:** por ausência de um arquivo poetry.lock versionado, a resolução de dependências do Docker e da CI pode variar entre builds. O workflow deste PR testa a construção da imagem para detectar incompatibilidades, mas um lock continua recomendado para uma entrega reprodutível.
