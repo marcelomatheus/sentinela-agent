@@ -65,7 +65,7 @@ O lock **não foi gerado no ambiente de autoria** (sem rede/Python 3.15). Gere, 
 
 ### Conectar a Evolution API à rede Docker privada
 
-O `compose.yaml` do Sentinela conecta **somente o serviço `api`** à rede externa `whatsapp_internal` e define o alias `sentinela-api`. `db` e `worker` permanecem somente na rede interna do Sentinela. A rede externa é intencionalmente **pré-criada** (Compose não a cria automaticamente).
+O `compose.yaml` conecta os serviços **`api` e `worker`** à rede externa `whatsapp_internal`, pois o worker precisa consultar mídias, enviar respostas e atualizar a presença na Evolution API. Apenas `api` define o alias `sentinela-api`. O `db` permanece somente na rede interna do Sentinela. A rede externa é intencionalmente **pré-criada** (Compose não a cria automaticamente).
 
 ```bash
 docker network inspect whatsapp_internal >/dev/null 2>&1 || docker network create whatsapp_internal
