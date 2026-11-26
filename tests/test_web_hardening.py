@@ -115,6 +115,7 @@ def test_preflight_reply_does_not_inherit_old_risk_label(store: WebStore) -> Non
     assert store.messages(OWNER,conversation,None)[-1]["risk"] == "ALTO"
 
     store.add_message(OWNER,conversation,uuid4(),Kind.TEXT,"oi",None)
+    quota_before = used(store, "web:" + OWNER)
     greeting=store.claim()
     assert greeting is not None
     process_web_job(greeting,store,core)
@@ -122,6 +123,7 @@ def test_preflight_reply_does_not_inherit_old_risk_label(store: WebStore) -> Non
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["risk"] is None
     assert "Sentinela" in messages[-1]["text"]
+    assert used(store, "web:" + OWNER) == quota_before
 
 
 def test_workers_claim_distinct_conversations_concurrently(store: WebStore) -> None:
