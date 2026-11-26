@@ -34,6 +34,18 @@ flowchart TD
 
 Um contexto delimitado (triagem de fraude); não há abstrações de microserviços desnecessárias. O motor avalia 12 regras uma vez, sem encadeamento recursivo. `ALTO`, `MODERADO` e `INCONCLUSIVO` são categorias heurísticas, não probabilidades. O agente não pode modificar a classificação nem inventar reputação de URL. As regras e suas fontes são inspecionáveis no código.
 
+## Ativação explícita no WhatsApp
+
+O Sentinela **não responde a uma conversa individual antes do opt-in**. O usuário deve enviar exatamente `Sentinela` (ignorando maiúsculas/minúsculas e espaços externos). O bot responde:
+
+> Sentinela ativo. Envie a mensagem, imagem ou áudio suspeito. Para terminar, envie Encerrar.
+
+A partir daí, texto, fotos, áudios e `/nova` seguem o pipeline de inferência. Ao enviar `Encerrar`, o estado fica inativo e o bot responde:
+
+> Sessão encerrada. Para iniciar novamente, envie Sentinela.
+
+Mensagens seguintes são ignoradas até nova ativação, quando uma **nova sessão** é criada e fatos/perguntas anteriores são apagados. O estado fica persistido por `(instance, wid)` em `app.sessions.active`, com padrão `false`. A transição e a resposta pendente são gravadas na mesma transação PostgreSQL; os comandos e mensagens ignoradas não gastam cota de inferência nem chamam a OpenAI. Confira [docs/optin-deploy.md](docs/optin-deploy.md).
+
 ## Executar na VPS
 
 Pré-requisitos: Docker Engine + Compose v2, instância Evolution API v2 existente com suporte a headers personalizados e chave OpenAI. **Na mesma VPS, não há necessidade de expor o webhook publicamente:** use a rede Docker compartilhada. Quando a Evolution estiver fora da rede privada, use um proxy HTTPS. O Postgres não publica portas. A API está vinculada a `127.0.0.1:8080` por padrão; se o proxy for um container, conecte os serviços à rede privada dele e aponte para `api:8080` (não use localhost de outro container).
@@ -44,10 +56,8 @@ chmod 600 .env
 # Gere dois segredos distintos e preencha o .env com eles e as chaves reais:
 openssl rand -hex 32
 openssl rand -hex 32
-# Gere o lock com Python 3.15.2 e Poetry antes de construir:
-poetry env use python3.15
-poetry lock
-poetry check --lock
+# O poetry.lock é versionado e verificado pelo Dockerfile e CI.
+# Não regenere o lock no servidor: mantenha o arquivo do commit selecionado.
 docker network inspect whatsapp_internal >/dev/null 2>&1 || docker network create whatsapp_internal
 docker compose config --quiet
 docker compose up -d --build
@@ -55,13 +65,7 @@ curl -fsS http://127.0.0.1:8080/health/ready
 docker compose logs -f worker
 ```
 
-Sem Python/Poetry no host, após instalar Docker, pode gerar o lock em container:
-
-```bash
-docker run --rm -v "$PWD:/app" -w /app python:3.15.2-slim sh -c 'pip install poetry==2.2.1 && poetry lock'
-```
-
-O lock **não foi gerado no ambiente de autoria** (sem rede/Python 3.15). Gere, valide e versione `poetry.lock` antes do primeiro deploy. A imagem permite resolver dependências se o lock estiver ausente, mas esse caminho não é reproduzível. Em volumes já existentes, `docker-entrypoint-initdb.d` não reexecuta scripts: aplique `db/001_initial.sql` explicitamente se necessário.
+O Dockerfile exige `poetry.lock` e executa `poetry check --lock` antes da instalação, garantindo que o build use a resolução versionada. Para atualizar versões, gere outro lock com Python 3.15.2 / Poetry 2.2.1 em uma branch e revise as alterações. Em volumes já existentes, `docker-entrypoint-initdb.d` não reexecuta scripts: aplique `db/001_initial.sql` explicitamente se necessário.
 
 ### Conectar a Evolution API à rede Docker privada
 
@@ -110,7 +114,7 @@ docker compose exec api python scripts/configure_webhook.py --apply
 # docker compose exec api python scripts/configure_webhook.py --apply --route event/webhook/set
 ```
 
-Configuração: `MESSAGES_UPSERT` + `PRESENCE_UPDATE`, `webhookBase64=false`, header HTTP `apikey` com o valor de `WEBHOOK_API_KEY` (diferente da chave de saída `EVOLUTION_API_KEY`). Não é aceita a chave dentro do JSON nem query string. Se sua versão não encaminhar headers customizados, atualize ou use um proxy privado autenticado que injete o header apenas após verificar a origem. Não exponha rota sem autenticação. Verifique o comportamento após reiniciar a Evolution.
+Configuração: `MESSAGES_UPSERT` + `PRESENCE_UPDATE`, `base64=false`, header HTTP `apikey` com o valor de `WEBHOOK_API_KEY` (diferente da chave de saída `EVOLUTION_API_KEY`). Não é aceita a chave dentro do JSON nem query string. Se sua versão não encaminhar headers customizados, atualize ou use um proxy privado autenticado que injete o header apenas após verificar a origem. Não exponha rota sem autenticação. Verifique o comportamento após reiniciar a Evolution.
 
 | Método e caminho | Finalidade |
 |---|---|
@@ -123,7 +127,7 @@ Configuração: `MESSAGES_UPSERT` + `PRESENCE_UPDATE`, `webhookBase64=false`, he
 | POST Evolution `/chat/getBase64FromMediaMessage/{instance}` | Busca mídia por ID de mensagem |
 | POST Evolution `/message/sendText/{instance}` | Entrega do resultado em texto |
 
-A mesma rota recebe todos os tipos, conforme o contrato Evolution. Eventos de grupo, status, mensagens do próprio bot e tipos não suportados são ignorados. PNG/JPEG/WebP são validados e redimensionados; áudio OGG/MP3/WAV/M4A/WebM é transcrito. O WID normaliza `@c.us` e `@s.whatsapp.net`; quando `remoteJidAlt` traz um telefone para um LID, usa-o para identificar a sessão. Sem alias, LID e telefone podem representar sessões distintas. O envio a `@lid` depende da versão da Evolution.
+A mesma rota recebe todos os tipos, conforme o contrato Evolution. Eventos de grupo, status, mensagens do próprio bot e tipos não suportados são ignorados. PNG/JPEG/WebP são validados e redimensionados; áudio OGG/MP3/WAV/M4A/WebM é transcrito. O WID normaliza o remetente individual `@s.whatsapp.net`; identificadores `@lid` permanecem separados até que exista uma associação verificada, evitando misturar históricos de usuários. O envio a `@lid` depende da versão da Evolution.
 
 A presença é melhor esforço, não um indicador contínuo durante toda a análise. A API devolve 202 após gravar o evento e não fica aguardando OpenAI. O worker usa uma trava PostgreSQL e fila persistente, processamento serial, três tentativas de análise, deduplicação por `(instance,message_id)` e estado `uncertain` para envio ambíguo. Não há promessa de entrega exatamente uma vez: um operador deve verificar a conversa antes de reenviar manualmente.
 
@@ -172,3 +176,7 @@ A visibilidade sugerida é privada até a entrega acadêmica; altere para públi
 - Google Safe Browsing v4: https://developers.google.com/safe-browsing/v4
 
 As regras são adaptações didáticas dos padrões de alerta, não transcrições das cartilhas nem regras validadas estatisticamente.
+
+### Compatibilidade da Evolution API 2.3.7
+
+O script `scripts/configure_webhook.py` usa `byEvents: false` e `base64: false` dentro do objeto `webhook`. Esta nomenclatura foi verificada no DTO da release 2.3.7; outras versões/documentações podem expor nomes diferentes. Nomes Unicode de instância, como `meu-número`, são aceitos e percent-encoded nos caminhos HTTP, sem permitir barras ou espaços.
