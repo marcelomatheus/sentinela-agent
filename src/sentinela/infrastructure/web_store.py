@@ -233,16 +233,90 @@ class WebStore:
             return row is not None
 
     def prune_orphans(self) -> list[UUID]:
+        """Transactional retention; worker unlinks files after commit.
+
+        The filesystem reconciler below catches unlink failures, interrupted
+        uploads and crashes between deleting DB rows and physical objects.
+        """
+        deleted: list[UUID] = []
         with self.connect() as conn:
-            rows=conn.execute(
+            rows = conn.execute(
                 """DELETE FROM app.web_attachments a
                    WHERE a.created_at < now()-interval '1 day'
                      AND NOT EXISTS(SELECT 1 FROM app.web_messages m WHERE m.attachment_id=a.id)
                    RETURNING id"""
             ).fetchall()
+            deleted.extend(row["id"] for row in rows)
+            old = conn.execute(
+                """SELECT id FROM app.web_conversations
+                   WHERE updated_at < now() - (%s * interval '1 day')
+                   ORDER BY updated_at LIMIT 100 FOR UPDATE SKIP LOCKED""",
+                (self.settings.web_retention_days,),
+            ).fetchall()
+            if old:
+                ids = [row["id"] for row in old]
+                attachments = conn.execute(
+                    "SELECT id FROM app.web_attachments WHERE conversation_id = ANY(%s::uuid[])",
+                    (ids,),
+                ).fetchall()
+                deleted.extend(row["id"] for row in attachments)
+                conn.execute(
+                    "DELETE FROM app.web_conversations WHERE id = ANY(%s::uuid[])",
+                    (ids,),
+                )
+            conn.execute(
+                """DELETE FROM app.web_jobs WHERE status IN ('done','failed','canceled')
+                   AND updated_at < now()-interval '30 days'"""
+            )
             conn.execute("DELETE FROM app.web_events WHERE created_at<now()-interval '14 days'")
             conn.execute("DELETE FROM app.web_request_nonces WHERE used_at<now()-interval '3 minutes'")
-            return [row["id"] for row in rows]
+        return deleted
+
+    def reconcile_files(self, root: str, min_age_seconds: int = 3600) -> int:
+        """Remove UUID-named files without metadata, including interrupted deletes.
+
+        Scan in chunks to bound memory. Do not touch uploads younger than an
+        hour; a concurrent upload may still be inserting its DB reference.
+        """
+        import time
+        path = Path(root).resolve()
+        if not path.is_dir():
+            return 0
+        cutoff = time.time() - min_age_seconds
+        removed = 0
+        candidates: list[tuple[UUID, Path]] = []
+
+        def reconcile_chunk() -> int:
+            if not candidates:
+                return 0
+            with self.connect() as conn:
+                rows = conn.execute(
+                    "SELECT id FROM app.web_attachments WHERE id = ANY(%s::uuid[])",
+                    ([ident for ident, _ in candidates],),
+                ).fetchall()
+            found = {row["id"] for row in rows}
+            count = 0
+            for ident, candidate in candidates:
+                if ident not in found:
+                    candidate.unlink(missing_ok=True)
+                    count += 1
+            candidates.clear()
+            return count
+
+        for candidate in path.iterdir():
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            try:
+                ident = UUID(candidate.name)
+                if str(ident) != candidate.name or candidate.stat().st_mtime >= cutoff:
+                    continue
+            except (OSError, ValueError):
+                continue
+            candidates.append((ident, candidate))
+            if len(candidates) >= 256:
+                removed += reconcile_chunk()
+        removed += reconcile_chunk()
+        return removed
 
     def recover(self) -> None:
         with self.connect() as conn:

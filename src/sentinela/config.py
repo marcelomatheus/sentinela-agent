@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     self_test_jid: str | None = None
     web_internal_key: SecretStr = SecretStr("")
     web_media_dir: str = "/data/web"
+    web_retention_days: int = Field(default=90, ge=7, le=365)
     openai_api_key: SecretStr
     openai_model: str = "gpt-5.4-mini"
     openai_transcription_model: str = "gpt-transcribe"

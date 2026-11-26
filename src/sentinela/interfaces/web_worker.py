@@ -69,6 +69,7 @@ def main() -> None:
             try:
                 for attachment in store.prune_orphans():
                     (Path(settings.web_media_dir)/str(attachment)).unlink(missing_ok=True)
+                store.reconcile_files(settings.web_media_dir)
             except Exception:
                 log.warning("web_retention_cleanup_failed")
             last_cleanup=time.monotonic()
