@@ -106,6 +106,8 @@ jobs:
         run: npm run build
       - name: Build BFF production Docker image
         run: docker build -f bff/Dockerfile -t sentinela-web:ci .
+      - name: Build standalone React production Nginx image
+        run: docker build -f web/Dockerfile.production -t sentinela-react:ci .
       - name: Validate production Traefik and Cloudflare Tunnel Compose
         run: |
           cp .env.example .env
