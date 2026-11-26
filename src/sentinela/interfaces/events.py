@@ -22,10 +22,13 @@ def parse_message(event: Event) -> Message | None:
         raise ValueError("invalid message key")
     if not jid.endswith(("@s.whatsapp.net", "@lid")):
         return None
-    alt = key.get("remoteJidAlt")
-    identity = alt if isinstance(alt, str) and alt.endswith("@s.whatsapp.net") else jid
+    # Never alias a sender to a different number based on alternate metadata.
+    # LID identities stay distinct until a verified mapping is available.
+    identity = jid
     local, _, server = identity.partition("@")
     number = local.split(":")[0]
+    if not __import__("re").fullmatch(r"[0-9]+(?::[0-9]+)?", local):
+        raise ValueError("invalid sender format")
     if not number.isascii() or not number.isdigit() or len(number) > 25:
         raise ValueError("invalid sender")
     wid = number if server == "s.whatsapp.net" else f"{number}@lid"

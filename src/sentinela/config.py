@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     max_body_bytes: int = Field(default=256_000, ge=1024, le=2_000_000)
     max_media_bytes: int = Field(default=8_000_000, ge=1024, le=20_000_000)
 
+    guard_max_chars: int = Field(default=4000, ge=256, le=8000)
+    guard_max_questions: int = Field(default=3, ge=0, le=4)
+    guard_user_daily: int = Field(default=20, ge=1, le=100)
+    guard_global_daily: int = Field(default=200, ge=1, le=2000)
+    guard_max_output_tokens: int = Field(default=768, ge=256, le=2048)
+    guard_timeout_seconds: int = Field(default=25, ge=5, le=60)
+    guard_audio_max_bytes: int = Field(default=500000, ge=10000, le=1000000)
+
     @field_validator("postgres_password", "webhook_api_key")
     @classmethod
     def strong_secret(cls, value: SecretStr) -> SecretStr:

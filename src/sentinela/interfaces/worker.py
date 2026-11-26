@@ -3,6 +3,7 @@ import logging
 import time
 from sentinela.application.analyze import AnalyzeMessage
 from sentinela.config import get_settings
+from sentinela.domain.guardrails import LIMIT, Policy
 from sentinela.infrastructure.ai import AgnoSpecialist,OpenAITranscriber
 from sentinela.infrastructure.evolution import Evolution
 from sentinela.infrastructure.postgres import Store
@@ -17,7 +18,8 @@ def main()->None:
     messenger=Evolution(settings)
     agent=AgnoSpecialist(settings)
     use_case=AnalyzeMessage(agent,agent,UrlReputation(settings.safe_browsing_api_key.get_secret_value()),
-        messenger,OpenAITranscriber(settings))
+        messenger,OpenAITranscriber(settings),Policy(settings.guard_max_chars,settings.guard_max_questions))
+    store.migrate_guardrails()
     store.recover()
     while True:
         job=store.claim()
@@ -38,7 +40,11 @@ def main()->None:
                 messenger.presence(job.message,True)
             except Exception:
                 log.warning("presence_unavailable job=%s",job.id)
-            result=use_case.execute(job.message,store.session(job.message))
+            session=store.session(job.message)
+            if not store.reserve(job):
+                store.save_result(job,session,LIMIT)
+                continue
+            result=use_case.execute(job.message,session)
             store.save_result(job,result.session,result.response)
         except Exception as exc:
             log.warning("analysis_failed job=%s error=%s",job.id,type(exc).__name__)

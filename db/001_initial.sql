@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS app.sessions (
   instance text NOT NULL, wid text NOT NULL, user_id uuid NOT NULL,
   session_id uuid NOT NULL, facts jsonb NOT NULL DEFAULT '[]',
   absent jsonb NOT NULL DEFAULT '[]', last_question text,
+  asked_questions jsonb NOT NULL DEFAULT '[]',
   updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (instance, wid)
 );
 CREATE TABLE IF NOT EXISTS app.inbox (
@@ -17,3 +18,8 @@ CREATE TABLE IF NOT EXISTS app.inbox (
 );
 CREATE INDEX IF NOT EXISTS inbox_pending_idx ON app.inbox (available_at, id)
 WHERE status IN ('pending','ready');
+
+CREATE TABLE IF NOT EXISTS app.guard_budget (
+  day date NOT NULL, scope text NOT NULL, used integer NOT NULL DEFAULT 0,
+  PRIMARY KEY(day,scope)
+);

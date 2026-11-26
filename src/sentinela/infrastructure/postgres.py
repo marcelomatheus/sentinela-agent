@@ -25,6 +25,32 @@ class Store:
             password=s.postgres_password.get_secret_value(), dbname=s.postgres_db,
             row_factory=dict_row, connect_timeout=5)
 
+    def migrate_guardrails(self) -> None:
+        # Idempotent migration, also applied on existing VPS volumes.
+        with self.connect() as conn:
+            conn.execute("ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS asked_questions jsonb NOT NULL DEFAULT '[]'")
+            conn.execute("""CREATE TABLE IF NOT EXISTS app.guard_budget (
+                day date NOT NULL, scope text NOT NULL, used integer NOT NULL DEFAULT 0,
+                PRIMARY KEY(day,scope))""")
+
+    def reserve(self, job: Job) -> bool:
+        """Atomic daily quota per sender and global; each attempt consumes one reservation."""
+        with self.connect() as conn:
+            scopes = (("global", self.settings.guard_global_daily),
+                      ("sender:" + job.message.instance + ":" + job.message.wid, self.settings.guard_user_daily))
+            for scope, _ in scopes:
+                conn.execute("""INSERT INTO app.guard_budget(day,scope) VALUES((now() AT TIME ZONE 'UTC')::date,%s)
+                    ON CONFLICT DO NOTHING""",(scope,))
+            for scope, maximum in scopes:
+                row = conn.execute("""SELECT used FROM app.guard_budget
+                    WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s FOR UPDATE""",(scope,)).fetchone()
+                if row is None or row["used"] >= maximum:
+                    return False
+            for scope, _ in scopes:
+                conn.execute("""UPDATE app.guard_budget SET used=used+1
+                    WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s""",(scope,))
+            return True
+
     def ready(self) -> None:
         with self.connect() as conn:
             conn.execute("SELECT 1 FROM app.inbox LIMIT 1")
@@ -66,14 +92,16 @@ class Store:
                 (message.instance,message.wid)).fetchone()
             assert row is not None
             return Session(row["user_id"],row["session_id"],frozenset(map(Fact,row["facts"])),
-                frozenset(map(Fact,row["absent"])),row["last_question"])
+                frozenset(map(Fact,row["absent"])),row["last_question"],frozenset(row["asked_questions"]))
 
     def save_result(self, job: Job, session: Session, response: str) -> None:
         with self.connect() as conn:
-            conn.execute("""UPDATE app.sessions SET session_id=%s,facts=%s,absent=%s,last_question=%s,
-                updated_at=now() WHERE instance=%s AND wid=%s""",
+            changed = conn.execute("""UPDATE app.sessions SET session_id=%s,facts=%s,absent=%s,last_question=%s,asked_questions=%s,
+                updated_at=now() WHERE instance=%s AND wid=%s AND user_id=%s""",
                 (session.session_id,Jsonb(sorted(session.facts)),Jsonb(sorted(session.absent)),
-                 session.last_question,job.message.instance,job.message.wid))
+                 session.last_question,Jsonb(sorted(session.asked_questions)),job.message.instance,job.message.wid,session.user_id))
+            if changed.rowcount != 1:
+                raise ValueError("session ownership mismatch")
             conn.execute("UPDATE app.inbox SET status='ready',response=%s,updated_at=now() WHERE id=%s",
                          (response,job.id))
 
