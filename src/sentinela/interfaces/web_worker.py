@@ -7,6 +7,7 @@ from pathlib import Path
 from sentinela.application.analyze import AnalyzeMessage
 from sentinela.application.errors import ExtractionFormatError
 from sentinela.config import get_settings
+from sentinela.domain.model import Kind
 from sentinela.domain.guardrails import FORMAT_UNAVAILABLE, INVALID, LIMIT, Policy, TEMPORARY_UNAVAILABLE
 from sentinela.infrastructure.ai import AgnoSpecialist, OpenAITranscriber
 from sentinela.infrastructure.reputation import UrlReputation
@@ -29,6 +30,15 @@ def process_web_job(job: WebJob, store: WebStore, use_case: AnalyzeMessage) -> N
     heartbeat = threading.Thread(target=renew,name="lease-renew",daemon=True)
     heartbeat.start()
     try:
+        # Pure deterministic replies (greeting, thanks, /nova, invalid input)
+        # must not consume the OpenAI inference budget.
+        if job.message.kind == Kind.TEXT and (
+            job.message.text.strip().lower() == "/nova"
+            or use_case.policy.preflight(job.message.text) is not None
+        ):
+            result = use_case.execute(job.message, job.session)
+            store.complete(job, result.session, result.response, None)
+            return
         if not store.reserve(job):
             store.complete(job,job.session,LIMIT,None)
             return
