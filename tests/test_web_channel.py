@@ -230,3 +230,32 @@ def test_web_worker_uses_common_analysis_case(store):
     assert len(replies)==1
     assert replies[0]["risk"]=="ALTO"
     assert "código" in replies[0]["text"].lower()
+
+
+
+def test_web_audio_upload_enforces_same_500kb_limit(settings, store, monkeypatch):
+    from sentinela.interfaces import web_auth
+    from sentinela.interfaces.http import create_app
+
+    monkeypatch.setattr(web_auth,"get_settings",lambda:settings)
+    class Inbox:
+        def enqueue(self,message):return True
+        def ready(self):return None
+
+    with TestClient(create_app(settings,Inbox())) as client:
+        response=client.post("/internal/web/conversations",headers=signed(method="POST"))
+        assert response.status_code==201,response.text
+        ident=response.json()["id"]
+        path=f"/internal/web/conversations/{ident}/attachments"
+        valid=b"OggS"+b"a"*(settings.guard_audio_max_bytes-4)
+        result=client.post(path,content=valid,headers={
+            **signed(method="POST",path=path,body=valid),
+            "content-type":"audio/ogg",
+        })
+        assert result.status_code==201,result.text
+        oversized=b"OggS"+b"a"*(settings.guard_audio_max_bytes-3)
+        response=client.post(path,content=oversized,headers={
+            **signed(method="POST",path=path,body=oversized),
+            "content-type":"audio/ogg",
+        })
+        assert response.status_code==413,response.text
