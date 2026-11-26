@@ -1,0 +1,44 @@
+"""Contratos de entrada: apenas eventos de conversas individuais."""
+from typing import Any
+from pydantic import BaseModel, ConfigDict, Field
+from sentinela.domain.model import Kind, Message
+
+class Event(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    event: str
+    instance: str = Field(min_length=1, max_length=80)
+    data: dict[str, Any]
+
+def parse_message(event: Event) -> Message | None:
+    if event.event.lower().replace("_", ".") != "messages.upsert":
+        return None
+    data = event.data
+    key = data.get("key")
+    if not isinstance(key, dict) or key.get("fromMe") is not False:
+        return None
+    jid = key.get("remoteJid")
+    mid = key.get("id")
+    if not isinstance(jid, str) or not isinstance(mid, str) or not 1 <= len(mid) <= 200:
+        raise ValueError("invalid message key")
+    if not jid.endswith(("@s.whatsapp.net", "@lid")):
+        return None
+    alt = key.get("remoteJidAlt")
+    identity = alt if isinstance(alt, str) and alt.endswith("@s.whatsapp.net") else jid
+    local, _, server = identity.partition("@")
+    number = local.split(":")[0]
+    if not number.isascii() or not number.isdigit() or len(number) > 25:
+        raise ValueError("invalid sender")
+    wid = number if server == "s.whatsapp.net" else f"{number}@lid"
+    body = data.get("message")
+    if not isinstance(body, dict):
+        return None
+    if isinstance(body.get("conversation"), str):
+        return Message(event.instance, mid, wid, Kind.TEXT, body["conversation"][:12000], remote_jid=jid)
+    for name, kind in (("extendedTextMessage", Kind.TEXT), ("imageMessage", Kind.IMAGE), ("audioMessage", Kind.AUDIO)):
+        part = body.get(name)
+        if isinstance(part, dict):
+            text = part.get("text" if kind == Kind.TEXT else "caption", "")
+            mime = part.get("mimetype", "")
+            return Message(event.instance, mid, wid, kind, text[:12000] if isinstance(text, str) else "",
+                           mime[:100] if isinstance(mime, str) else "", jid)
+    return None

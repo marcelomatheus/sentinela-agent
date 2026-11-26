@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sentinela}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinela}
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./db/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+  api:
+    build: .
+    env_file: .env
+    environment: &app_env
+      POSTGRES_HOST: db
+      AGNO_TELEMETRY: 'false'
+    depends_on:
+      db: {condition: service_healthy}
+    ports:
+      - '127.0.0.1:${HTTP_PORT:-8080}:8080'
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  worker:
+    build: .
+    command: [python, -m, sentinela.interfaces.worker]
+    env_file: .env
+    environment: *app_env
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    stop_grace_period: 180s
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+volumes:
+  pgdata:
