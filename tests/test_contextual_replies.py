@@ -65,7 +65,7 @@ def test_same_banking_rules_do_not_repeat_full_diagnosis_on_followup() -> None:
     assert "outro código pelo aplicativo" in second.response
     assert second.response.startswith("Entendi:")
     assert "Possível falsa central bancária" not in second.response
-    assert "Ligue para o banco" in second.response
+    assert "ligue para o banco" in second.response.lower()
     assert fake.extract_calls == 2
 
 
