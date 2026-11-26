@@ -19,6 +19,18 @@ LIMIT = (
     "Você atingiu o limite de análises por hoje. Pode tentar novamente amanhã. "
     "Enquanto isso, não compartilhe senhas ou códigos."
 )
+FORMAT_UNAVAILABLE = (
+    "Não consegui interpretar essa mensagem com clareza. "
+    "Pode reenviar o texto original ou uma captura mais legível, sem dados pessoais?"
+)
+TEMPORARY_UNAVAILABLE = (
+    "Tive uma dificuldade técnica para analisar agora. "
+    "Pode tentar de novo em alguns minutos? Se houver urgência, confirme por um canal oficial."
+)
+CONFLICTING = (
+    "Encontrei informações que não combinam. "
+    "Pode me enviar a mensagem completa para eu conferir?"
+)
 INVALID = (
     "Não consegui entender esse conteúdo com segurança. "
     "Pode me enviar uma descrição curta, sem dados pessoais?"

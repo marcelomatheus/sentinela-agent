@@ -49,7 +49,7 @@ def create_app(settings:Settings|None=None, store:Inbox|None=None)->FastAPI:
             event=Event.model_validate_json(body)
             if event.instance!=config.evolution_instance:
                 raise HTTPException(403,"unexpected instance")
-            message=parse_message(event)
+            message=parse_message(event,self_test_jid=config.self_test_jid)
         except (ValidationError,ValueError):
             raise HTTPException(422,"invalid event") from None
         if message is None:
