@@ -17,6 +17,7 @@ from sentinela.config import Settings
 from sentinela.domain.model import Kind
 from sentinela.infrastructure.web_media import private_file_root, sniff_media
 from sentinela.infrastructure.web_store import WebStore
+from sentinela.infrastructure.web_events import WebEventBus
 from sentinela.interfaces.web_auth import verify_principal
 
 
@@ -28,7 +29,7 @@ class MessageInput(BaseModel):
     attachmentId: UUID | None = None
 
 
-def create_web_router(settings: Settings, web_store: WebStore) -> APIRouter:
+def create_web_router(settings: Settings, web_store: WebStore, event_bus: WebEventBus) -> APIRouter:
     router = APIRouter(prefix="/internal/web", tags=["internal-web"])
     owner_dep = Depends(verify_principal)
 
@@ -147,24 +148,35 @@ def create_web_router(settings: Settings, web_store: WebStore) -> APIRouter:
         except LookupError:
             raise HTTPException(status_code=404,detail="conversation not found") from None
 
+        wake = event_bus.subscribe(conversation_id)
+
         async def stream():
-            cursor=after
-            for tick in range(150):
-                if await request.is_disconnected():
-                    break
-                try:
-                    entries = await run_in_threadpool(
-                        web_store.events,owner,conversation_id,cursor
-                    )
-                except LookupError:
-                    break
-                for entry in entries:
-                    cursor=entry["id"]
-                    serialized=json.dumps(entry["payload"],ensure_ascii=False)
-                    yield f"id: {cursor}\nevent: {entry['kind']}\ndata: {serialized}\n\n"
-                if tick%15 == 0:
-                    yield ": heartbeat\n\n"
-                await asyncio.sleep(0.6)
+            cursor = after
+            try:
+                while not await request.is_disconnected():
+                    # Subscribe first, then clear before the durable query.
+                    # A concurrent NOTIFY can never be lost between the read
+                    # and our next wait.
+                    wake.clear()
+                    try:
+                        entries = await run_in_threadpool(
+                            web_store.events, owner, conversation_id, cursor
+                        )
+                    except LookupError:
+                        break
+                    for entry in entries:
+                        cursor = entry["id"]
+                        serialized = json.dumps(entry["payload"], ensure_ascii=False)
+                        yield f"id: {cursor}\nevent: {entry['kind']}\ndata: {serialized}\n\n"
+                    if len(entries) >= 50:
+                        continue
+                    try:
+                        await asyncio.wait_for(wake.wait(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        # Slow fallback if the PostgreSQL listener is offline.
+                        yield ": heartbeat\n\n"
+            finally:
+                event_bus.unsubscribe(conversation_id, wake)
 
         return StreamingResponse(stream(),media_type="text/event-stream",headers={
             "Cache-Control":"no-store,no-transform","X-Accel-Buffering":"no",
