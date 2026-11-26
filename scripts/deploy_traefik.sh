@@ -3,7 +3,11 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-ENV_FILE="${1:-$ROOT/.env}"
+ENV_FILE="$ROOT/.env"
+if [[ "$#" -gt 0 ]]; then
+  echo "ERRO: use somente o .env existente no projeto; arquivo alternativo nao e suportado pelo Compose base." >&2
+  exit 1
+fi
 [[ -f "$ENV_FILE" ]] || { echo "ERRO: arquivo de ambiente ausente: $ENV_FILE" >&2; exit 1; }
 command -v docker >/dev/null || { echo "ERRO: Docker nao instalado" >&2; exit 1; }
 docker compose version >/dev/null || { echo "ERRO: Compose v2 necessario" >&2; exit 1; }
