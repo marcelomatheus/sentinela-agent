@@ -36,11 +36,11 @@ function error(statusCode: number, message: string): Error {
 
 export async function createBff(config: BffConfig = readConfig()) {
   const key = require32Bytes(config.BFF_SESSION_KEY);
-  const app = Fastify({ logger: true, bodyLimit: 9000000, requestTimeout: 35000 });
+  const app = Fastify({ logger: true, trustProxy: ["loopback", "uniquelocal"], bodyLimit: 9000000, requestTimeout: 35000 });
   await app.register(cookie);
   await app.register(helmet, { global: true });
   await app.register(rateLimit, {
-    global: true, max: 120, timeWindow: "1 minute",
+    global: true, max: 600, timeWindow: "1 minute",
   });
   await app.register(multipart, {
     limits: { files: 1, fileSize: 8000000, fields: 0 },
