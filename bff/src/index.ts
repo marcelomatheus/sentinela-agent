@@ -309,6 +309,8 @@ export async function createBff(config: BffConfig = readConfig()) {
   return app;
 }
 
-const config=readConfig();
-const app=await createBff(config);
-await app.listen({host:"0.0.0.0",port:config.PORT});
+if (process.env.NODE_ENV !== "test") {
+  const config=readConfig();
+  const app=await createBff(config);
+  await app.listen({host:"0.0.0.0",port:config.PORT});
+}
