@@ -47,3 +47,6 @@ A CI é teste automatizado, não substitui testes de integração externa.
 Fontes: https://pypi.org/project/agno/ , https://pypi.org/project/openai/ , https://pypi.org/project/fastapi/ , https://pypi.org/project/pydantic/ , https://pypi.org/project/SQLAlchemy/ e https://pypi.org/project/psycopg/ .
 
 **Limitação:** por ausência de um arquivo poetry.lock versionado, a resolução de dependências do Docker e da CI pode variar entre builds. O workflow deste PR testa a construção da imagem para detectar incompatibilidades, mas um lock continua recomendado para uma entrega reprodutível.
+
+## Falha adicional identificada pela CI de imagem Docker
+A execução 45734553679 detectou falta de `gcc` no estágio de build `python:3.15.2-slim`. Uma dependência transitiva do Poetry (`zstandard`) foi instalada a partir de código-fonte por não haver wheel adequada no momento do teste. A imagem agora instala `build-essential` **apenas no estágio de construção**, sem incluir o compilador na imagem de produção. A confirmação depende de novo build no HEAD do PR.
