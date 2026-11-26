@@ -21,15 +21,20 @@ def create_app(settings:Settings|None=None, store:Inbox|None=None)->FastAPI:
     config=settings
     inbox=store
     from sentinela.infrastructure.web_store import WebStore
+    from sentinela.infrastructure.web_events import WebEventBus
     web_store=WebStore(config)
+    event_bus=WebEventBus(config)
+    web_enabled=len(config.web_internal_key.get_secret_value()) >= 32
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if len(config.web_internal_key.get_secret_value()) >= 32:
+        if web_enabled:
             await run_in_threadpool(web_store.migrate)
+            event_bus.start()
         try:
             yield
         finally:
+            await event_bus.close()
             web_store.pool.close()
 
     app=FastAPI(title="Sentinela",docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
@@ -75,5 +80,6 @@ def create_app(settings:Settings|None=None, store:Inbox|None=None)->FastAPI:
     # Web routes are gated by a signed, private BFF identity. When no key is
     # configured, the WhatsApp-only installation continues unchanged.
     from sentinela.interfaces.web_api import create_web_router
-    app.include_router(create_web_router(config,web_store))
+    app.state.web_store=web_store
+    app.include_router(create_web_router(config,web_store,event_bus))
     return app
