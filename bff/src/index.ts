@@ -6,7 +6,6 @@ import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import * as oidc from "openid-client";
 import { existsSync } from "node:fs";
-import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { once } from "node:events";
 import { z } from "zod";
@@ -204,7 +203,7 @@ export async function createBff(config: BffConfig = readConfig()) {
     const max=mime.startsWith("image/") ? 8000000 : 1000000;
     if (!content.length || content.length>max) throw error(413,"file exceeds limit");
     return forward(reply,await proxy(
-      user,"POST",`/conversations/${params.id}/attachments`,content,mime,
+      user,"POST",`/conversations/${params.id}/attachments`,new Uint8Array(content),mime,
     ));
   });
   app.post("/api/conversations/:id/reset", async (request,reply) => {
@@ -227,7 +226,7 @@ export async function createBff(config: BffConfig = readConfig()) {
     const lastId=Number(request.headers["last-event-id"]??0);
     const after=Number.isSafeInteger(lastId)&&lastId>=0?Math.max(query.after,lastId):query.after;
     const upstream=await proxy(
-      user,"GET",`/conversations/${params.id}/events?after=${query.after}`,
+      user,"GET",`/conversations/${params.id}/events?after=${after}`,
       undefined,undefined,true,
     );
     if (!upstream.ok || !upstream.body) return forward(reply,upstream);
