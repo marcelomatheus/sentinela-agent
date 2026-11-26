@@ -319,11 +319,64 @@ class WebStore:
         return removed
 
     def recover(self) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                """UPDATE app.web_jobs SET status='pending',lease_token=NULL,lease_until=NULL,
-                   updated_at=now() WHERE status='processing' AND lease_until<now()"""
-            )
+        """Recover expired leases or fail jobs that exhausted all attempts.
+
+        Conversation-first row locking matches claim/reset/complete and keeps
+        recovery from publishing events while holding a job-only lock.
+        """
+        for _ in range(100):
+            with self.connect() as conn:
+                conversation = conn.execute(
+                    """SELECT c.id FROM app.web_conversations c
+                       WHERE EXISTS (
+                         SELECT 1 FROM app.web_jobs j
+                         WHERE j.conversation_id=c.id AND j.status='processing'
+                           AND j.lease_until<now()
+                       )
+                       ORDER BY c.updated_at,c.id LIMIT 1
+                       FOR UPDATE OF c SKIP LOCKED"""
+                ).fetchone()
+                if conversation is None:
+                    return
+                expired = conn.execute(
+                    """SELECT id,input_message_id,attempts
+                       FROM app.web_jobs WHERE conversation_id=%s
+                         AND status='processing' AND lease_until<now()
+                       ORDER BY created_at,id FOR UPDATE""",
+                    (conversation["id"],),
+                ).fetchall()
+                for job in expired:
+                    if job["attempts"] >= 3:
+                        conn.execute(
+                            """UPDATE app.web_jobs SET status='failed',lease_token=NULL,
+                               lease_until=NULL,error_code='lease_expired',
+                               updated_at=now() WHERE id=%s""",
+                            (job["id"],),
+                        )
+                        conn.execute(
+                            "UPDATE app.web_messages SET status='failed' WHERE id=%s",
+                            (job["input_message_id"],),
+                        )
+                        self._event(conn, conversation["id"], "failed", {
+                            "messageId": str(job["input_message_id"]),
+                            "status": "failed",
+                            "text": "Não consegui analisar agora. Tente novamente.",
+                        })
+                    else:
+                        conn.execute(
+                            """UPDATE app.web_jobs SET status='pending',lease_token=NULL,
+                               lease_until=NULL,available_at=now(),updated_at=now()
+                               WHERE id=%s""",
+                            (job["id"],),
+                        )
+                        conn.execute(
+                            "UPDATE app.web_messages SET status='queued' WHERE id=%s",
+                            (job["input_message_id"],),
+                        )
+                        self._event(conn, conversation["id"], "retry", {
+                            "messageId": str(job["input_message_id"]),
+                            "status": "queued",
+                        })
 
     def claim(self) -> WebJob | None:
         """Lock the conversation before the job, in the same order as reset and complete."""
