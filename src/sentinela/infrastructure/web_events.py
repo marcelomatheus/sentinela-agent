@@ -20,6 +20,7 @@ class WebEventBus:
         self.settings = settings
         self._subscribers: dict[UUID, set[asyncio.Event]] = defaultdict(set)
         self._task: asyncio.Task[None] | None = None
+        self.ready = asyncio.Event()
 
     def subscribe(self, conversation_id: UUID) -> asyncio.Event:
         event = asyncio.Event()
@@ -60,6 +61,7 @@ class WebEventBus:
                     connect_timeout=5,
                 ) as conn:
                     await conn.execute("LISTEN sentinela_web_events")
+                    self.ready.set()
                     async for notification in conn.notifies():
                         try:
                             conversation = UUID(notification.payload)
@@ -70,5 +72,6 @@ class WebEventBus:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.ready.clear()
                 log.exception("web_event_listener_disconnected")
                 await asyncio.sleep(2)
