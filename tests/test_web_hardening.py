@@ -250,3 +250,21 @@ def test_exhausted_expired_lease_is_marked_failed(store: WebStore) -> None:
     assert state["status"]=="failed" and state["error_code"]=="lease_expired"
     assert store.claim() is None
     assert any(event["kind"]=="failed" for event in store.events(OWNER,conversation,0))
+
+
+
+def test_concurrent_api_worker_schema_migrations_are_serialized(store: WebStore) -> None:
+    barrier=Barrier(2)
+
+    def migrate():
+        barrier.wait(timeout=5)
+        store.migrate()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs=[pool.submit(migrate) for _ in range(2)]
+        for future in jobs:
+            future.result(timeout=15)
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) AS n FROM app.web_request_nonces"
+        ).fetchone()["n"] >= 0
