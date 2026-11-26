@@ -1,0 +1,608 @@
+"""Web-only persistence and concurrently claimable jobs. No Evolution dependency."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
+
+from psycopg.types.json import Jsonb
+
+from sentinela.config import Settings
+from sentinela.domain.model import Fact, Kind, Message, Session
+from sentinela.infrastructure.web_pool import BoundedWebPool
+
+
+@dataclass(frozen=True)
+class WebJob:
+    id: UUID
+    conversation_id: UUID
+    message_id: UUID
+    generation: int
+    lease_token: UUID
+    attempts: int
+    owner_id: str
+    message: Message
+    session: Session
+
+
+class WebStore:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.pool = BoundedWebPool(settings)
+
+    def connect(self):
+        return self.pool.connection()
+
+    def migrate(self) -> None:
+        script = Path(__file__).resolve().parents[3] / "db" / "002_web.sql"
+        with self.connect() as conn:
+            # API and workers can start together. Serialize DDL across
+            # processes before applying the idempotent migration script.
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (718204101,))
+            conn.execute(script.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _event(conn, conversation_id: UUID, kind: str, payload: dict[str, Any]) -> None:
+        conn.execute(
+            "INSERT INTO app.web_events(conversation_id,kind,payload) VALUES(%s,%s,%s)",
+            (conversation_id, kind, Jsonb(payload)),
+        )
+        conn.execute("SELECT pg_notify('sentinela_web_events', %s)", (str(conversation_id),))
+
+    @staticmethod
+    def _serialize(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(row["id"]), "conversationId": str(row["conversation_id"]),
+            "role": row["role"], "kind": row["kind"], "text": row["body"],
+            "attachmentId": str(row["attachment_id"]) if row["attachment_id"] else None,
+            "status": row["status"], "risk": row["risk"],
+            "createdAt": row["created_at"].isoformat(),
+        }
+
+    def create_conversation(self, owner: str) -> dict[str, Any]:
+        ident, user = uuid4(), uuid5(NAMESPACE_URL, "sentinela:web:" + owner)
+        sess = uuid4()
+        with self.connect() as conn:
+            # Bound resource usage even when the account repeatedly opens conversations.
+            count = conn.execute(
+                "SELECT count(*) AS n FROM app.web_conversations WHERE owner_id=%s", (owner,)
+            ).fetchone()["n"]
+            if count >= 100:
+                raise ValueError("conversation limit reached")
+            conn.execute(
+                """INSERT INTO app.web_conversations(id,owner_id,user_id,session_id)
+                   VALUES(%s,%s,%s,%s)""",
+                (ident, owner, user, sess),
+            )
+        return {"id": str(ident), "title": "Nova análise", "createdAt": datetime.now().astimezone().isoformat()}
+
+    def list_conversations(self, owner: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT id,title,updated_at FROM app.web_conversations
+                   WHERE owner_id=%s ORDER BY updated_at DESC,id DESC LIMIT 100""", (owner,)
+            ).fetchall()
+        return [{"id": str(row["id"]), "title": row["title"],
+                 "updatedAt": row["updated_at"].isoformat()} for row in rows]
+
+    def _owned(self, conn, owner: str, conv: UUID, *, locked: bool = False):
+        row = conn.execute(
+            "SELECT * FROM app.web_conversations WHERE id=%s AND owner_id=%s"
+            + (" FOR UPDATE" if locked else ""),
+            (conv, owner),
+        ).fetchone()
+        if row is None:
+            raise LookupError("conversation not found")
+        return row
+
+    def message_snapshot(
+        self, owner: str, conv: UUID, before: datetime | None,
+    ) -> dict[str, Any]:
+        """Read the event cursor before the messages: no event can be missed.
+
+        An event between these reads is either present in the subsequent
+        message list or picked up by the SSE stream (duplicates are harmless).
+        """
+        with self.connect() as conn:
+            self._owned(conn, owner, conv)
+            cursor = conn.execute(
+                "SELECT COALESCE(MAX(id),0) AS cursor FROM app.web_events WHERE conversation_id=%s",
+                (conv,),
+            ).fetchone()["cursor"]
+            rows = conn.execute(
+                """SELECT * FROM app.web_messages
+                   WHERE conversation_id=%s AND (%s::timestamptz IS NULL OR created_at < %s)
+                   ORDER BY created_at DESC,id DESC LIMIT 50""",
+                (conv, before, before),
+            ).fetchall()
+        return {
+            "messages": [self._serialize(row) for row in reversed(rows)],
+            "cursor": cursor,
+        }
+
+    def messages(self, owner: str, conv: UUID, before: datetime | None, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            self._owned(conn, owner, conv)
+            rows = conn.execute(
+                """SELECT * FROM app.web_messages
+                   WHERE conversation_id=%s AND (%s::timestamptz IS NULL OR created_at < %s)
+                   ORDER BY created_at DESC,id DESC LIMIT %s""",
+                (conv, before, before, limit),
+            ).fetchall()
+        return [self._serialize(row) for row in reversed(rows)]
+
+    def add_message(
+        self, owner: str, conv: UUID, client_id: UUID, kind: Kind,
+        text: str, attachment_id: UUID | None,
+    ) -> tuple[dict[str, Any], bool]:
+        with self.connect() as conn:
+            conversation = self._owned(conn, owner, conv, locked=True)
+            previous = conn.execute(
+                """SELECT * FROM app.web_messages
+                   WHERE conversation_id=%s AND client_message_id=%s""",
+                (conv, client_id),
+            ).fetchone()
+            if previous:
+                return self._serialize(previous), False
+            queued = conn.execute(
+                """SELECT count(*) AS n FROM app.web_jobs WHERE conversation_id=%s
+                   AND status IN ('pending','processing')""", (conv,),
+            ).fetchone()["n"]
+            if queued >= 5:
+                raise ValueError("too many pending messages")
+            if kind == Kind.TEXT:
+                if attachment_id is not None or not text.strip():
+                    raise ValueError("invalid text input")
+            elif attachment_id is None:
+                raise ValueError("media attachment required")
+            if attachment_id:
+                exists = conn.execute(
+                    """SELECT 1 FROM app.web_attachments WHERE id=%s
+                       AND conversation_id=%s AND owner_id=%s AND mime LIKE %s""",
+                    (attachment_id, conv, owner,
+                     "image/%" if kind == Kind.IMAGE else "audio/%"),
+                ).fetchone()
+                if not exists:
+                    raise ValueError("attachment does not belong to conversation")
+            msg_id, job_id = uuid4(), uuid4()
+            conn.execute(
+                """INSERT INTO app.web_messages
+                   (id,conversation_id,client_message_id,role,kind,body,attachment_id,status,generation)
+                   VALUES (%s,%s,%s,'user',%s,%s,%s,'queued',%s)""",
+                (msg_id, conv, client_id, kind.value, text, attachment_id,
+                 conversation["generation"]),
+            )
+            conn.execute(
+                """INSERT INTO app.web_jobs(id,conversation_id,input_message_id,generation,status)
+                   VALUES (%s,%s,%s,%s,'pending')""",
+                (job_id, conv, msg_id, conversation["generation"]),
+            )
+            if conversation["title"] == "Nova análise" and text.strip():
+                title = " ".join(text.split())[:55]
+                conn.execute(
+                    "UPDATE app.web_conversations SET title=%s,updated_at=now() WHERE id=%s",
+                    (title,conv),
+                )
+            else:
+                conn.execute(
+                    "UPDATE app.web_conversations SET updated_at=now() WHERE id=%s", (conv,)
+                )
+            saved = conn.execute("SELECT * FROM app.web_messages WHERE id=%s", (msg_id,)).fetchone()
+            assert saved is not None
+            view = self._serialize(saved)
+            self._event(conn, conv, "message", {"message": view})
+            return view, True
+
+    def upload_attachment(
+        self, owner: str, conv: UUID, ident: UUID, mime: str, size: int, checksum: str,
+    ) -> None:
+        with self.connect() as conn:
+            self._owned(conn, owner, conv, locked=True)
+            usage=conn.execute(
+                """SELECT count(*) AS count,coalesce(sum(byte_size),0) AS total
+                   FROM app.web_attachments WHERE conversation_id=%s""",(conv,),
+            ).fetchone()
+            if usage["count"]>=50 or usage["total"]+size>100000000:
+                raise ValueError("attachment quota exceeded")
+            conn.execute(
+                """INSERT INTO app.web_attachments(id,conversation_id,owner_id,mime,byte_size,sha256)
+                   VALUES(%s,%s,%s,%s,%s,%s)""",
+                (ident, conv, owner, mime, size, checksum),
+            )
+
+    def reset(self, owner: str, conv: UUID) -> None:
+        with self.connect() as conn:
+            self._owned(conn, owner, conv, locked=True)
+            conn.execute(
+                """UPDATE app.web_conversations SET generation=generation+1, session_id=%s,
+                   facts='[]',absent='[]',last_question=NULL,asked_questions='[]',
+                   updated_at=now() WHERE id=%s""",
+                (uuid4(), conv),
+            )
+            conn.execute(
+                """UPDATE app.web_messages SET status='canceled'
+                   WHERE conversation_id=%s AND status IN ('queued','processing')""", (conv,)
+            )
+            conn.execute(
+                """UPDATE app.web_jobs SET status='canceled',updated_at=now()
+                   WHERE conversation_id=%s AND status IN ('pending','processing')""", (conv,)
+            )
+            self._event(conn, conv, "reset", {"conversationId": str(conv)})
+
+    def delete(self, owner: str, conv: UUID) -> list[UUID]:
+        with self.connect() as conn:
+            self._owned(conn, owner, conv, locked=True)
+            files = conn.execute(
+                "SELECT id FROM app.web_attachments WHERE conversation_id=%s", (conv,)
+            ).fetchall()
+            conn.execute("DELETE FROM app.web_conversations WHERE id=%s", (conv,))
+            return [r["id"] for r in files]
+
+    def events(self, owner: str, conv: UUID, after: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            self._owned(conn, owner, conv)
+            rows = conn.execute(
+                """SELECT id,kind,payload FROM app.web_events
+                   WHERE conversation_id=%s AND id>%s ORDER BY id LIMIT 50""",
+                (conv, after),
+            ).fetchall()
+        return [{"id": row["id"], "kind": row["kind"], "payload": row["payload"]} for row in rows]
+
+    def consume_nonce(self, nonce: UUID) -> bool:
+        """Mutating internal requests are authenticated exactly once."""
+        with self.connect() as conn:
+            row = conn.execute(
+                """INSERT INTO app.web_request_nonces(id) VALUES(%s)
+                   ON CONFLICT DO NOTHING RETURNING id""",
+                (nonce,),
+            ).fetchone()
+            return row is not None
+
+    def prune_orphans(self) -> list[UUID]:
+        """Transactional retention; worker unlinks files after commit.
+
+        The filesystem reconciler below catches unlink failures, interrupted
+        uploads and crashes between deleting DB rows and physical objects.
+        """
+        deleted: list[UUID] = []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """DELETE FROM app.web_attachments a
+                   WHERE a.created_at < now()-interval '1 day'
+                     AND NOT EXISTS(SELECT 1 FROM app.web_messages m WHERE m.attachment_id=a.id)
+                   RETURNING id"""
+            ).fetchall()
+            deleted.extend(row["id"] for row in rows)
+            old = conn.execute(
+                """SELECT id FROM app.web_conversations
+                   WHERE updated_at < now() - (%s * interval '1 day')
+                   ORDER BY updated_at LIMIT 100 FOR UPDATE SKIP LOCKED""",
+                (self.settings.web_retention_days,),
+            ).fetchall()
+            if old:
+                ids = [row["id"] for row in old]
+                attachments = conn.execute(
+                    "SELECT id FROM app.web_attachments WHERE conversation_id = ANY(%s::uuid[])",
+                    (ids,),
+                ).fetchall()
+                deleted.extend(row["id"] for row in attachments)
+                conn.execute(
+                    "DELETE FROM app.web_conversations WHERE id = ANY(%s::uuid[])",
+                    (ids,),
+                )
+            conn.execute(
+                """DELETE FROM app.web_jobs WHERE status IN ('done','failed','canceled')
+                   AND updated_at < now()-interval '30 days'"""
+            )
+            conn.execute("DELETE FROM app.web_events WHERE created_at<now()-interval '14 days'")
+            conn.execute("DELETE FROM app.web_request_nonces WHERE used_at<now()-interval '3 minutes'")
+        return deleted
+
+    def reconcile_files(self, root: str, min_age_seconds: int = 3600) -> int:
+        """Remove UUID-named files without metadata, including interrupted deletes.
+
+        Scan in chunks to bound memory. Do not touch uploads younger than an
+        hour; a concurrent upload may still be inserting its DB reference.
+        """
+        import time
+        path = Path(root).resolve()
+        if not path.is_dir():
+            return 0
+        cutoff = time.time() - min_age_seconds
+        removed = 0
+        candidates: list[tuple[UUID, Path]] = []
+
+        def reconcile_chunk() -> int:
+            if not candidates:
+                return 0
+            with self.connect() as conn:
+                rows = conn.execute(
+                    "SELECT id FROM app.web_attachments WHERE id = ANY(%s::uuid[])",
+                    ([ident for ident, _ in candidates],),
+                ).fetchall()
+            found = {row["id"] for row in rows}
+            count = 0
+            for ident, candidate in candidates:
+                if ident not in found:
+                    candidate.unlink(missing_ok=True)
+                    count += 1
+            candidates.clear()
+            return count
+
+        for candidate in path.iterdir():
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            try:
+                ident = UUID(candidate.name)
+                if str(ident) != candidate.name or candidate.stat().st_mtime >= cutoff:
+                    continue
+            except (OSError, ValueError):
+                continue
+            candidates.append((ident, candidate))
+            if len(candidates) >= 256:
+                removed += reconcile_chunk()
+        removed += reconcile_chunk()
+        return removed
+
+    def recover(self) -> None:
+        """Recover expired leases or fail jobs that exhausted all attempts.
+
+        Conversation-first row locking matches claim/reset/complete and keeps
+        recovery from publishing events while holding a job-only lock.
+        """
+        for _ in range(100):
+            with self.connect() as conn:
+                conversation = conn.execute(
+                    """SELECT c.id FROM app.web_conversations c
+                       WHERE EXISTS (
+                         SELECT 1 FROM app.web_jobs j
+                         WHERE j.conversation_id=c.id AND j.status='processing'
+                           AND j.lease_until<now()
+                       )
+                       ORDER BY c.updated_at,c.id LIMIT 1
+                       FOR UPDATE OF c SKIP LOCKED"""
+                ).fetchone()
+                if conversation is None:
+                    return
+                expired = conn.execute(
+                    """SELECT id,input_message_id,attempts
+                       FROM app.web_jobs WHERE conversation_id=%s
+                         AND status='processing' AND lease_until<now()
+                       ORDER BY created_at,id FOR UPDATE""",
+                    (conversation["id"],),
+                ).fetchall()
+                for job in expired:
+                    if job["attempts"] >= 3:
+                        conn.execute(
+                            """UPDATE app.web_jobs SET status='failed',lease_token=NULL,
+                               lease_until=NULL,error_code='lease_expired',
+                               updated_at=now() WHERE id=%s""",
+                            (job["id"],),
+                        )
+                        conn.execute(
+                            "UPDATE app.web_messages SET status='failed' WHERE id=%s",
+                            (job["input_message_id"],),
+                        )
+                        self._event(conn, conversation["id"], "failed", {
+                            "messageId": str(job["input_message_id"]),
+                            "status": "failed",
+                            "text": "Não consegui analisar agora. Tente novamente.",
+                        })
+                    else:
+                        conn.execute(
+                            """UPDATE app.web_jobs SET status='pending',lease_token=NULL,
+                               lease_until=NULL,available_at=now(),updated_at=now()
+                               WHERE id=%s""",
+                            (job["id"],),
+                        )
+                        conn.execute(
+                            "UPDATE app.web_messages SET status='queued' WHERE id=%s",
+                            (job["input_message_id"],),
+                        )
+                        self._event(conn, conversation["id"], "retry", {
+                            "messageId": str(job["input_message_id"]),
+                            "status": "queued",
+                        })
+
+    def claim(self) -> WebJob | None:
+        """Lock the conversation before the job, in the same order as reset and complete."""
+        with self.connect() as conn:
+            conversation = conn.execute(
+                """SELECT c.id FROM app.web_conversations c
+                   WHERE EXISTS (
+                     SELECT 1 FROM app.web_jobs j
+                     WHERE j.conversation_id=c.id AND j.status='pending'
+                       AND j.available_at<=now() AND j.generation=c.generation
+                       AND NOT EXISTS (
+                         SELECT 1 FROM app.web_jobs earlier
+                         WHERE earlier.conversation_id=j.conversation_id
+                           AND earlier.status IN ('pending','processing')
+                           AND (earlier.created_at<j.created_at
+                             OR (earlier.created_at=j.created_at AND earlier.id<j.id))
+                       )
+                   )
+                   ORDER BY c.updated_at,c.id LIMIT 1
+                   FOR UPDATE OF c SKIP LOCKED"""
+            ).fetchone()
+            if conversation is None:
+                return None
+            row = conn.execute(
+                """SELECT j.id,j.conversation_id,j.input_message_id,j.generation,
+                          j.attempts,m.kind,m.body,m.attachment_id,c.owner_id,c.user_id,
+                          c.session_id,c.facts,c.absent,c.last_question,c.asked_questions
+                   FROM app.web_jobs j
+                   JOIN app.web_conversations c ON c.id=j.conversation_id
+                   JOIN app.web_messages m ON m.id=j.input_message_id
+                   WHERE j.conversation_id=%s AND j.status='pending'
+                     AND j.available_at<=now() AND j.generation=c.generation
+                     AND NOT EXISTS (
+                       SELECT 1 FROM app.web_jobs earlier
+                       WHERE earlier.conversation_id=j.conversation_id
+                         AND earlier.status IN ('pending','processing')
+                         AND (earlier.created_at<j.created_at
+                           OR (earlier.created_at=j.created_at AND earlier.id<j.id))
+                     )
+                   ORDER BY j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED""",
+                (conversation["id"],),
+            ).fetchone()
+            if row is None:
+                return None
+            token = uuid4()
+            conn.execute(
+                """UPDATE app.web_jobs SET status='processing',attempts=attempts+1,
+                   lease_token=%s,lease_until=now()+interval '120 seconds',updated_at=now()
+                   WHERE id=%s""", (token,row["id"]),
+            )
+            conn.execute(
+                "UPDATE app.web_messages SET status='processing' WHERE id=%s",
+                (row["input_message_id"],),
+            )
+            self._event(conn, row["conversation_id"], "processing", {
+                "messageId": str(row["input_message_id"]), "status": "processing",
+            })
+            media = {"attachment_id": str(row["attachment_id"])} if row["attachment_id"] else None
+            return WebJob(
+                row["id"],row["conversation_id"],row["input_message_id"],row["generation"],
+                token,row["attempts"]+1,row["owner_id"],
+                Message("web",str(row["input_message_id"]),str(row["conversation_id"]),
+                        Kind(row["kind"]),row["body"],media_envelope=media),
+                Session(row["user_id"],row["session_id"],frozenset(map(Fact,row["facts"])),
+                        frozenset(map(Fact,row["absent"])),row["last_question"],
+                        frozenset(row["asked_questions"])),
+            )
+
+    def heartbeat(self, job: WebJob) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """UPDATE app.web_jobs SET lease_until=now()+interval '120 seconds'
+                   WHERE id=%s AND lease_token=%s AND status='processing'""",
+                (job.id,job.lease_token),
+            )
+
+    def reserve(self, job: WebJob) -> bool:
+        """Reserve one inference quota per job, never once per delivery attempt.
+
+        The job lock and budget locks are held in one transaction. On a retry,
+        quota_reserved makes this a no-op. Both web and WhatsApp use the same
+        global daily budget; scopes are locked in deterministic order.
+        """
+        scopes = (("global", self.settings.guard_global_daily),
+                  ("web:" + job.owner_id, self.settings.guard_user_daily))
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT quota_reserved FROM app.web_jobs
+                   WHERE id=%s AND lease_token=%s AND status='processing'
+                   FOR UPDATE""",
+                (job.id, job.lease_token),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["quota_reserved"]:
+                return True
+            for scope, _ in scopes:
+                conn.execute(
+                    """INSERT INTO app.guard_budget(day,scope)
+                       VALUES((now() AT TIME ZONE 'UTC')::date,%s)
+                       ON CONFLICT DO NOTHING""",
+                    (scope,),
+                )
+            for scope, maximum in scopes:
+                used = conn.execute(
+                    """SELECT used FROM app.guard_budget
+                       WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s
+                       FOR UPDATE""", (scope,),
+                ).fetchone()
+                if used is None or used["used"] >= maximum:
+                    return False
+            for scope, _ in scopes:
+                conn.execute(
+                    """UPDATE app.guard_budget SET used=used+1
+                       WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s""",
+                    (scope,),
+                )
+            conn.execute(
+                "UPDATE app.web_jobs SET quota_reserved=true WHERE id=%s",
+                (job.id,),
+            )
+            return True
+
+    def complete(self, job: WebJob, result: Session, response: str, risk: str | None) -> bool:
+        with self.connect() as conn:
+            conversation = conn.execute(
+                "SELECT generation FROM app.web_conversations WHERE id=%s FOR UPDATE",
+                (job.conversation_id,),
+            ).fetchone()
+            if conversation is None or conversation["generation"] != job.generation:
+                return False
+            valid = conn.execute(
+                """SELECT id FROM app.web_jobs
+                   WHERE id=%s AND status='processing' AND lease_token=%s
+                     AND generation=%s FOR UPDATE""",
+                (job.id, job.lease_token, job.generation),
+            ).fetchone()
+            if not valid:
+                return False
+            conn.execute(
+                """UPDATE app.web_conversations SET session_id=%s,facts=%s,absent=%s,
+                   last_question=%s,asked_questions=%s,updated_at=now() WHERE id=%s""",
+                (result.session_id,Jsonb(sorted(result.facts)),Jsonb(sorted(result.absent)),
+                 result.last_question,Jsonb(sorted(result.asked_questions)),job.conversation_id),
+            )
+            assistant_id=uuid4()
+            conn.execute(
+                """INSERT INTO app.web_messages
+                   (id,conversation_id,role,kind,body,status,risk,generation)
+                   VALUES(%s,%s,'assistant','text',%s,'completed',%s,%s)""",
+                (assistant_id,job.conversation_id,response,risk,job.generation),
+            )
+            conn.execute(
+                "UPDATE app.web_messages SET status='completed' WHERE id=%s",
+                (job.message_id,),
+            )
+            conn.execute(
+                """UPDATE app.web_jobs SET status='done',lease_token=NULL,
+                   lease_until=NULL,updated_at=now() WHERE id=%s""", (job.id,)
+            )
+            msg = conn.execute("SELECT * FROM app.web_messages WHERE id=%s",(assistant_id,)).fetchone()
+            assert msg is not None
+            self._event(conn,job.conversation_id,"message",{"message":self._serialize(msg)})
+            return True
+
+    def fail(self, job: WebJob, code: str, *, transient: bool = True) -> None:
+        with self.connect() as conn:
+            conversation = conn.execute(
+                "SELECT generation FROM app.web_conversations WHERE id=%s FOR UPDATE",
+                (job.conversation_id,),
+            ).fetchone()
+            if conversation is None or conversation["generation"] != job.generation:
+                return
+            valid = conn.execute(
+                """SELECT 1 FROM app.web_jobs WHERE id=%s AND lease_token=%s
+                   AND status='processing' FOR UPDATE""",
+                (job.id,job.lease_token),
+            ).fetchone()
+            if not valid:
+                return
+            if transient and job.attempts < 3:
+                conn.execute(
+                    """UPDATE app.web_jobs SET status='pending',lease_token=NULL,
+                       lease_until=NULL,available_at=now()+(%s * interval '1 second'),
+                       error_code=%s,updated_at=now() WHERE id=%s""",
+                    (2**job.attempts,code,job.id),
+                )
+            else:
+                conn.execute(
+                    """UPDATE app.web_jobs SET status='failed',lease_token=NULL,
+                       lease_until=NULL,error_code=%s,updated_at=now() WHERE id=%s""",
+                    (code,job.id),
+                )
+                conn.execute(
+                    "UPDATE app.web_messages SET status='failed' WHERE id=%s",
+                    (job.message_id,),
+                )
+                self._event(conn,job.conversation_id,"failed",{
+                    "messageId":str(job.message_id),"status":"failed",
+                    "text":"Não consegui analisar agora. Você pode tentar novamente.",
+                })

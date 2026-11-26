@@ -1,0 +1,28 @@
+{
+  "name": "@sentinela/web",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "lucide-react": "1.80.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "^7.0.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.4.0",
+    "vitest": "^4.0.0"
+  }
+}

@@ -9,3 +9,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 *.log
+
+node_modules/
+web/dist/
+bff/dist/
+.env.local

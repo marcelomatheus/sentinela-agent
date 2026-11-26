@@ -1,5 +1,6 @@
 """Authenticated webhook with bounded request bodies."""
 import hmac
+from contextlib import asynccontextmanager
 from typing import Protocol
 from fastapi import FastAPI, Request, HTTPException
 from pydantic import ValidationError
@@ -19,7 +20,24 @@ def create_app(settings:Settings|None=None, store:Inbox|None=None)->FastAPI:
         store=Store(settings)
     config=settings
     inbox=store
-    app=FastAPI(title="Sentinela",docs_url=None,redoc_url=None,openapi_url=None)
+    from sentinela.infrastructure.web_store import WebStore
+    from sentinela.infrastructure.web_events import WebEventBus
+    web_store=WebStore(config)
+    event_bus=WebEventBus(config)
+    web_enabled=len(config.web_internal_key.get_secret_value()) >= 32
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if web_enabled:
+            await run_in_threadpool(web_store.migrate)
+            event_bus.start()
+        try:
+            yield
+        finally:
+            await event_bus.close()
+            web_store.pool.close()
+
+    app=FastAPI(title="Sentinela",docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
 
     @app.get("/health/live")
     def live()->dict[str,str]:
@@ -59,4 +77,9 @@ def create_app(settings:Settings|None=None, store:Inbox|None=None)->FastAPI:
         except Exception:
             raise HTTPException(503,"inbox unavailable") from None
         return {"status":"accepted" if inserted else "duplicate"}
+    # Web routes are gated by a signed, private BFF identity. When no key is
+    # configured, the WhatsApp-only installation continues unchanged.
+    from sentinela.interfaces.web_api import create_web_router
+    app.state.web_store=web_store
+    app.include_router(create_web_router(config,web_store,event_bus))
     return app

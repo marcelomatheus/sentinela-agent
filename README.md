@@ -218,3 +218,7 @@ O script `scripts/configure_webhook.py` usa `byEvents: false` e `base64: false` 
 As respostas de ativação e encerramento são mensagens determinísticas, sem invocar a OpenAI. A entrega é agendada na fila com `available_at`, padrão **1,5 segundo** (variável `GATE_REPLY_DELAY_SECONDS`, faixa 0–5). Não há `sleep` nem retenção de transação durante a espera. Mensagens posteriores do mesmo contato aguardam a confirmação; outros contatos continuam sendo processados.
 
 O agente mantém o escopo estrito de triagem, mas conversa com um tom acolhedor e simples. A resposta final mostra no máximo duas conclusões práticas, sem códigos internos das regras, lista técnica de fatos ou referência bibliográfica em cada mensagem. Fatos, classificação e recomendações seguem determinísticos; a LLM apenas extrai fatos e seleciona perguntas permitidas.
+
+## Sentinela Web — React + BFF
+
+O canal web reutiliza o mesmo `AnalyzeMessage` do WhatsApp, com conversas independentes e fila web concorrente. Home e chat React/Vite/TypeScript em `web/`; BFF Fastify/TypeScript com OIDC/PKCE, Zod e SSE em `bff/`. Migração `db/002_web.sql`; publicação opt-in por perfil Docker `web`, preservando a instalação WhatsApp. Guia completo em [docs/web-multicanal.md](docs/web-multicanal.md).

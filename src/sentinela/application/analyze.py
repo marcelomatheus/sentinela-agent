@@ -27,6 +27,7 @@ _SCENARIOS = frozenset({
 class AnalysisResult:
     session: Session
     response: str
+    risk: Risk | None = None
 
 
 @dataclass(slots=True)
@@ -104,8 +105,11 @@ class AnalyzeMessage:
             log.warning("question_agent_unavailable")
             selected = None
         question = selected if selected in options else next(iter(options), None)
-        return AnalysisResult(replace(session, last_question=question, asked_questions=session.asked_questions | ({question} if question else set())), render(
-            assessment, question,
-            context_note=safe_context_note(observed.context_note, text),
-            follow_up=repeated_high_risk,
-        ))
+        return AnalysisResult(
+            replace(session, last_question=question,
+                    asked_questions=session.asked_questions | ({question} if question else set())),
+            render(assessment, question,
+                   context_note=safe_context_note(observed.context_note, text),
+                   follow_up=repeated_high_risk),
+            assessment.risk,
+        )

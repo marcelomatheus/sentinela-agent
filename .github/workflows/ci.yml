@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 jobs:
@@ -59,3 +63,46 @@ jobs:
           assert compose["networks"]["whatsapp_internal"]["external"] is True
           PY
       - run: docker build --pull --tag sentinela:ci .
+      - name: Smoke test web migration in real Python containers
+        run: |
+          cp .env.example .env
+          sed -i \
+            -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=disposable-ci-password-123456789/' \
+            -e 's/^WEBHOOK_API_KEY=.*/WEBHOOK_API_KEY=disposable-ci-webhook-key-123456789/' \
+            -e 's/^EVOLUTION_API_KEY=.*/EVOLUTION_API_KEY=test-only/' \
+            -e 's/^OPENAI_API_KEY=.*/OPENAI_API_KEY=test-only/' \
+            -e 's/^WEB_INTERNAL_KEY=.*/WEB_INTERNAL_KEY=internal-disposable-signature-key-123456789/' \
+            .env
+          docker network create whatsapp_internal
+          trap 'docker compose --profile web down -v --remove-orphans; docker network rm whatsapp_internal' EXIT
+          docker compose --profile web up -d --build db api web_worker
+          for attempt in $(seq 1 45); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8080/health/ready; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8080/health/ready
+          docker compose --profile web exec -T web_worker python -c \
+            "from sentinela.config import get_settings; from sentinela.infrastructure.web_store import WebStore; s=WebStore(get_settings()); c=s.connect(); db=c.__enter__(); assert db.execute('SELECT count(*) AS n FROM app.web_request_nonces').fetchone()['n']==0; assert db.execute('SELECT count(*) AS n FROM app.web_jobs').fetchone()['n']==0; c.__exit__(None,None,None)"
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+      - name: Upgrade npm resolver
+        run: npm install --global npm@11.21.3
+      - name: Install locked Node dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck BFF and React
+        run: npm run typecheck
+      - name: Test frontend and BFF
+        run: npm run test
+      - name: Build frontend and BFF
+        run: npm run build
+      - name: Build BFF production Docker image
+        run: docker build -f bff/Dockerfile -t sentinela-web:ci .

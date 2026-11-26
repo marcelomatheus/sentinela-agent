@@ -10,11 +10,12 @@ RUN poetry check --lock
 RUN poetry install --only main --no-root
 COPY src ./src
 COPY scripts ./scripts
+COPY db ./db
 RUN poetry install --only main
 FROM python:3.15.2-slim
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 AGNO_TELEMETRY=false
 WORKDIR /app
-RUN groupadd --system app && useradd --system --gid app --no-create-home app
+RUN groupadd --system app && useradd --system --gid app --no-create-home app && mkdir -p /data/web && chown app:app /data/web
 COPY --from=build /app /app
 USER app
 EXPOSE 8080
