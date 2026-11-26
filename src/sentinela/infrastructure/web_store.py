@@ -46,6 +46,7 @@ class WebStore:
             "INSERT INTO app.web_events(conversation_id,kind,payload) VALUES(%s,%s,%s)",
             (conversation_id, kind, Jsonb(payload)),
         )
+        conn.execute("SELECT pg_notify('sentinela_web_events', %s)", (str(conversation_id),))
 
     @staticmethod
     def _serialize(row: dict[str, Any]) -> dict[str, Any]:
@@ -240,7 +241,27 @@ class WebStore:
             )
 
     def claim(self) -> WebJob | None:
+        """Lock the conversation before the job, in the same order as reset and complete."""
         with self.connect() as conn:
+            conversation = conn.execute(
+                """SELECT c.id FROM app.web_conversations c
+                   WHERE EXISTS (
+                     SELECT 1 FROM app.web_jobs j
+                     WHERE j.conversation_id=c.id AND j.status='pending'
+                       AND j.available_at<=now() AND j.generation=c.generation
+                       AND NOT EXISTS (
+                         SELECT 1 FROM app.web_jobs earlier
+                         WHERE earlier.conversation_id=j.conversation_id
+                           AND earlier.status IN ('pending','processing')
+                           AND (earlier.created_at<j.created_at
+                             OR (earlier.created_at=j.created_at AND earlier.id<j.id))
+                       )
+                   )
+                   ORDER BY c.updated_at,c.id LIMIT 1
+                   FOR UPDATE OF c SKIP LOCKED"""
+            ).fetchone()
+            if conversation is None:
+                return None
             row = conn.execute(
                 """SELECT j.id,j.conversation_id,j.input_message_id,j.generation,
                           j.attempts,m.kind,m.body,m.attachment_id,c.owner_id,c.user_id,
@@ -248,17 +269,17 @@ class WebStore:
                    FROM app.web_jobs j
                    JOIN app.web_conversations c ON c.id=j.conversation_id
                    JOIN app.web_messages m ON m.id=j.input_message_id
-                   WHERE j.status='pending' AND j.available_at<=now()
-                     AND j.generation=c.generation
+                   WHERE j.conversation_id=%s AND j.status='pending'
+                     AND j.available_at<=now() AND j.generation=c.generation
                      AND NOT EXISTS (
                        SELECT 1 FROM app.web_jobs earlier
                        WHERE earlier.conversation_id=j.conversation_id
-                         AND earlier.created_at<=j.created_at
-                         AND earlier.id<>j.id
                          AND earlier.status IN ('pending','processing')
-                         AND (earlier.created_at<j.created_at OR earlier.id<j.id)
+                         AND (earlier.created_at<j.created_at
+                           OR (earlier.created_at=j.created_at AND earlier.id<j.id))
                      )
-                   ORDER BY j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED"""
+                   ORDER BY j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED""",
+                (conversation["id"],),
             ).fetchone()
             if row is None:
                 return None
@@ -266,11 +287,11 @@ class WebStore:
             conn.execute(
                 """UPDATE app.web_jobs SET status='processing',attempts=attempts+1,
                    lease_token=%s,lease_until=now()+interval '120 seconds',updated_at=now()
-                   WHERE id=%s""", (token,row["id"])
+                   WHERE id=%s""", (token,row["id"]),
             )
             conn.execute(
                 "UPDATE app.web_messages SET status='processing' WHERE id=%s",
-                (row["input_message_id"],)
+                (row["input_message_id"],),
             )
             self._event(conn, row["conversation_id"], "processing", {
                 "messageId": str(row["input_message_id"]), "status": "processing",
@@ -343,12 +364,17 @@ class WebStore:
 
     def complete(self, job: WebJob, result: Session, response: str, risk: str | None) -> bool:
         with self.connect() as conn:
+            conversation = conn.execute(
+                "SELECT generation FROM app.web_conversations WHERE id=%s FOR UPDATE",
+                (job.conversation_id,),
+            ).fetchone()
+            if conversation is None or conversation["generation"] != job.generation:
+                return False
             valid = conn.execute(
-                """SELECT j.id FROM app.web_jobs j
-                   JOIN app.web_conversations c ON c.id=j.conversation_id
-                   WHERE j.id=%s AND j.status='processing' AND j.lease_token=%s
-                     AND j.generation=c.generation FOR UPDATE OF j,c""",
-                (job.id, job.lease_token),
+                """SELECT id FROM app.web_jobs
+                   WHERE id=%s AND status='processing' AND lease_token=%s
+                     AND generation=%s FOR UPDATE""",
+                (job.id, job.lease_token, job.generation),
             ).fetchone()
             if not valid:
                 return False
@@ -380,6 +406,12 @@ class WebStore:
 
     def fail(self, job: WebJob, code: str, *, transient: bool = True) -> None:
         with self.connect() as conn:
+            conversation = conn.execute(
+                "SELECT generation FROM app.web_conversations WHERE id=%s FOR UPDATE",
+                (job.conversation_id,),
+            ).fetchone()
+            if conversation is None or conversation["generation"] != job.generation:
+                return
             valid = conn.execute(
                 """SELECT 1 FROM app.web_jobs WHERE id=%s AND lease_token=%s
                    AND status='processing' FOR UPDATE""",
