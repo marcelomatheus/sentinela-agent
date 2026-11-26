@@ -32,7 +32,9 @@ class Extracted(BaseModel):
     absent: list[Fact] = Field(max_length=20)
     continues_previous: bool
     in_scope: bool
-    context_note: str = Field(max_length=160)
+    # Required for the structured-output schema, but filtered at rendering.
+    # An overlong contextual note must not invalidate the factual risk result.
+    context_note: str
 
 class Choice(BaseModel):
     model_config = ConfigDict(extra="forbid")
