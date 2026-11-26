@@ -52,12 +52,18 @@ def store(settings):
     return web
 
 
-def signed(owner=BASE, ts=None):
+def signed(owner=BASE, ts=None, *, method="GET",
+           path="/internal/web/conversations", body=b"", nonce=None):
     timestamp=str(int(time.time()) if ts is None else ts)
-    sig=hmac.new(SECRET.encode(),f"{owner}\n{timestamp}".encode(),hashlib.sha256).hexdigest()
+    unique=nonce or str(uuid4())
+    digest=hashlib.sha256(body).hexdigest()
+    canonical="\n".join((owner,timestamp,unique,method,path,digest))
+    sig=hmac.new(SECRET.encode(),canonical.encode(),hashlib.sha256).hexdigest()
     return {
         "x-sentinela-principal":owner,
         "x-sentinela-timestamp":timestamp,
+        "x-sentinela-nonce":unique,
+        "x-sentinela-body-sha256":digest,
         "x-sentinela-signature":sig,
     }
 
@@ -74,16 +80,42 @@ def test_auth_signature_and_ownership(settings,store,monkeypatch):
     with TestClient(create_app(settings,Inbox())) as client:
         unauth=client.post("/internal/web/conversations")
         assert unauth.status_code==401
-        expired=client.post("/internal/web/conversations",headers=signed(ts=int(time.time())-400))
+        expired=client.post("/internal/web/conversations",headers=signed(
+            ts=int(time.time())-400,method="POST",
+        ))
         assert expired.status_code==401
-        created=client.post("/internal/web/conversations",headers=signed())
-        assert created.status_code==201
+        created=client.post("/internal/web/conversations",headers=signed(method="POST"))
+        assert created.status_code==201,created.text
         conv=created.json()["id"]
-        assert client.get(f"/internal/web/conversations/{conv}/messages",headers=signed(OTHER)).status_code==404
-        bad=client.post(f"/internal/web/conversations/{conv}/messages",
-            json={"clientMessageId":str(uuid4()),"kind":"text","text":""},headers=signed())
+        path=f"/internal/web/conversations/{conv}/messages"
+        assert client.get(path,headers=signed(OTHER,path=path)).status_code==404
+        raw=b'{"clientMessageId":"' + str(uuid4()).encode() + b'","kind":"text","text":""}'
+        bad=client.post(path,content=raw,headers={
+            **signed(method="POST",path=path,body=raw),
+            "content-type":"application/json",
+        })
         assert bad.status_code==400
         assert client.get("/internal/web/conversations",headers=signed()).status_code==200
+
+
+def test_internal_signature_covers_method_path_body_and_nonce(settings,store,monkeypatch):
+    from sentinela.interfaces import web_auth
+    from sentinela.interfaces.http import create_app
+
+    monkeypatch.setattr(web_auth,"get_settings",lambda:settings)
+    class Inbox:
+        def enqueue(self,message):return True
+        def ready(self):return None
+
+    with TestClient(create_app(settings,Inbox())) as client:
+        signed_post=signed(method="POST")
+        good=client.post("/internal/web/conversations",headers=signed_post)
+        assert good.status_code==201
+        assert client.post("/internal/web/conversations",headers=signed_post).status_code==401
+        # Signature for POST cannot authorize a GET nor another path.
+        assert client.get("/internal/web/conversations",headers=signed(method="POST")).status_code==401
+        assert client.post("/internal/web/conversations",
+                           content=b"tampered",headers=signed(method="POST")).status_code==401
 
 
 def test_idempotency_and_serialization(store):
