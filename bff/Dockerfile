@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY bff/package.json ./bff/package.json
 COPY web/package.json ./web/package.json
-RUN npm ci
+RUN npm install -g npm@11.21.3 && npm ci
 COPY bff ./bff
 COPY web ./web
 RUN npm run build

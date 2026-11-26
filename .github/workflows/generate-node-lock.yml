@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.16.0'
+      - name: Upgrade npm resolver
+        run: npm install --global npm@11.21.3
       - name: Generate pinned dependency tree
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Commit lock to feature branch

@@ -68,6 +68,8 @@ jobs:
         with:
           node-version: '22.16.0'
           cache: npm
+      - name: Upgrade npm resolver
+        run: npm install --global npm@11.21.3
       - name: Install locked Node dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Typecheck BFF and React
