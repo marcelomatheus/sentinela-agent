@@ -10,6 +10,7 @@ RUN poetry check --lock
 RUN poetry install --only main --no-root
 COPY src ./src
 COPY scripts ./scripts
+COPY db ./db
 RUN poetry install --only main
 FROM python:3.15.2-slim
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 AGNO_TELEMETRY=false

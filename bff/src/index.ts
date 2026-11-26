@@ -200,7 +200,7 @@ export async function createBff(config: BffConfig = readConfig()) {
       throw error(415,"unsupported MIME");
     }
     const content=await attachment.toBuffer();
-    const max=mime.startsWith("image/") ? 8000000 : 1000000;
+    const max=mime.startsWith("image/") ? 8000000 : 500000;
     if (!content.length || content.length>max) throw error(413,"file exceeds limit");
     return forward(reply,await proxy(
       user,"POST",`/conversations/${params.id}/attachments`,new Uint8Array(content),mime,

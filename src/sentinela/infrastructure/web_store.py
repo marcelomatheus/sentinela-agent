@@ -294,30 +294,51 @@ class WebStore:
                 (job.id,job.lease_token),
             )
 
-    def reserve(self, owner: str) -> bool:
-        scopes = (("global",self.settings.guard_global_daily),
-                  ("web:" + owner,self.settings.guard_user_daily))
+    def reserve(self, job: WebJob) -> bool:
+        """Reserve one inference quota per job, never once per delivery attempt.
+
+        The job lock and budget locks are held in one transaction. On a retry,
+        quota_reserved makes this a no-op. Both web and WhatsApp use the same
+        global daily budget; scopes are locked in deterministic order.
+        """
+        scopes = (("global", self.settings.guard_global_daily),
+                  ("web:" + job.owner_id, self.settings.guard_user_daily))
         with self.connect() as conn:
-            for scope,_ in scopes:
+            row = conn.execute(
+                """SELECT quota_reserved FROM app.web_jobs
+                   WHERE id=%s AND lease_token=%s AND status='processing'
+                   FOR UPDATE""",
+                (job.id, job.lease_token),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["quota_reserved"]:
+                return True
+            for scope, _ in scopes:
                 conn.execute(
                     """INSERT INTO app.guard_budget(day,scope)
-                       VALUES((now() AT TIME ZONE 'UTC')::date,%s) ON CONFLICT DO NOTHING""",
+                       VALUES((now() AT TIME ZONE 'UTC')::date,%s)
+                       ON CONFLICT DO NOTHING""",
                     (scope,),
                 )
-            for scope,maximum in scopes:
+            for scope, maximum in scopes:
                 used = conn.execute(
                     """SELECT used FROM app.guard_budget
-                       WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s FOR UPDATE""",
-                    (scope,),
+                       WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s
+                       FOR UPDATE""", (scope,),
                 ).fetchone()
-                if used is None or used["used"]>=maximum:
+                if used is None or used["used"] >= maximum:
                     return False
-            for scope,_ in scopes:
+            for scope, _ in scopes:
                 conn.execute(
                     """UPDATE app.guard_budget SET used=used+1
                        WHERE day=(now() AT TIME ZONE 'UTC')::date AND scope=%s""",
                     (scope,),
                 )
+            conn.execute(
+                "UPDATE app.web_jobs SET quota_reserved=true WHERE id=%s",
+                (job.id,),
+            )
             return True
 
     def complete(self, job: WebJob, result: Session, response: str, risk: str | None) -> bool:

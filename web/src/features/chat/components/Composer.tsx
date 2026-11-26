@@ -23,8 +23,8 @@ export default function Composer({
     if(!chosen)return;
     const result=mediaSchema.safeParse(chosen);
     if(!result.success){setError("Formato inválido ou arquivo maior que 8 MB.");return;}
-    if(chosen.type.startsWith("audio/")&&chosen.size>1000000){
-      setError("Áudios podem ter até 1 MB.");return;
+    if(chosen.type.startsWith("audio/")&&chosen.size>500000){
+      setError("Áudios podem ter até 500 KB.");return;
     }
     setError(null);setFile(chosen);
   }

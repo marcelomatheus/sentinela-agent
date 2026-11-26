@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS app.web_jobs (
   generation integer NOT NULL,
   status text NOT NULL CHECK (status IN ('pending','processing','done','failed','canceled')),
   attempts integer NOT NULL DEFAULT 0,
+  quota_reserved boolean NOT NULL DEFAULT false,
   available_at timestamptz NOT NULL DEFAULT now(),
   lease_until timestamptz,
   lease_token uuid,
@@ -76,3 +77,6 @@ CREATE INDEX IF NOT EXISTS web_events_cursor_idx
 
 CREATE INDEX IF NOT EXISTS web_jobs_lease_idx ON app.web_jobs(lease_until)
   WHERE status='processing';
+
+-- Compatible with installations that already ran the initial web migration.
+ALTER TABLE app.web_jobs ADD COLUMN IF NOT EXISTS quota_reserved boolean NOT NULL DEFAULT false;
