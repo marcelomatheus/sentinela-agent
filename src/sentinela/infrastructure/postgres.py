@@ -1,11 +1,14 @@
 """Durable inbox, user identity, and session state."""
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from sentinela.config import Settings
+from sentinela.domain.chat import ACTIVATED, DEACTIVATED
 from sentinela.domain.model import Fact, Kind, Message, Session
 
 @dataclass(frozen=True, slots=True)
@@ -25,10 +28,30 @@ class Store:
             password=s.postgres_password.get_secret_value(), dbname=s.postgres_db,
             row_factory=dict_row, connect_timeout=5)
 
+    @contextmanager
+    def worker_lock(self) -> Iterator[None]:
+        """Ensure only one live worker performs recovery or message processing."""
+        key = 720118420147
+        conn = self.connect()
+        acquired = False
+        try:
+            row = conn.execute("SELECT pg_try_advisory_lock(%s) AS locked", (key,)).fetchone()
+            acquired = bool(row and row["locked"])
+            conn.commit()
+            if not acquired:
+                raise RuntimeError("another Sentinela worker already holds the lock")
+            yield
+        finally:
+            if acquired:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (key,))
+                conn.commit()
+            conn.close()
+
     def migrate_guardrails(self) -> None:
         # Idempotent migration, also applied on existing VPS volumes.
         with self.connect() as conn:
             conn.execute("ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS asked_questions jsonb NOT NULL DEFAULT '[]'")
+            conn.execute("ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT false")
             conn.execute("""CREATE INDEX IF NOT EXISTS inbox_sender_open_idx ON app.inbox(instance,wid,id)
                 WHERE status IN ('pending','processing','ready','sending')""")
             conn.execute("""CREATE INDEX IF NOT EXISTS inbox_terminal_retention_idx ON app.inbox(updated_at)
@@ -36,6 +59,104 @@ class Store:
             conn.execute("""CREATE TABLE IF NOT EXISTS app.guard_budget (
                 day date NOT NULL, scope text NOT NULL, used integer NOT NULL DEFAULT 0,
                 PRIMARY KEY(day,scope))""")
+
+    def gate(self, job: Job) -> bool:
+        """Apply per-contact opt-in and durable replies atomically.
+
+        Returns True only if the message should enter the inference pipeline.
+        The inbox status and session activation state commit in one transaction.
+        A ready reply is sent later by the ordinary, at-most-once delivery path.
+        """
+        message = job.message
+        command = message.text.strip().casefold() if message.kind == Kind.TEXT else ""
+        with self.connect() as conn:
+            # The inbox entry must belong to a currently claimed processing job.
+            inbox = conn.execute(
+                """SELECT id FROM app.inbox
+                   WHERE id=%s AND instance=%s AND message_id=%s AND wid=%s
+                     AND status='processing' AND response IS NULL
+                   FOR UPDATE""",
+                (job.id, message.instance, message.message_id, message.wid),
+            ).fetchone()
+            if inbox is None:
+                raise RuntimeError("job is no longer processing")
+
+            conn.execute(
+                """INSERT INTO app.sessions(instance,wid,user_id,session_id)
+                   VALUES(%s,%s,%s,%s) ON CONFLICT (instance,wid) DO NOTHING""",
+                (message.instance, message.wid, uuid4(), uuid4()),
+            )
+            state = conn.execute(
+                """SELECT active FROM app.sessions
+                   WHERE instance=%s AND wid=%s FOR UPDATE""",
+                (message.instance, message.wid),
+            ).fetchone()
+            if state is None:
+                raise RuntimeError("session not found after insert")
+
+            active = bool(state["active"])
+            if command == "sentinela":
+                if not active:
+                    conn.execute(
+                        """UPDATE app.sessions
+                           SET active=true, session_id=%s, facts='[]', absent='[]',
+                               last_question=NULL, asked_questions='[]', updated_at=now()
+                           WHERE instance=%s AND wid=%s""",
+                        (uuid4(), message.instance, message.wid),
+                    )
+                self._gate_complete(
+                    conn, job.id,
+                    "ready",
+                    ACTIVATED,
+                    delay_seconds=self.settings.gate_reply_delay_seconds,
+                )
+                return False
+
+            if not active:
+                # Never send, infer, reserve quota, or keep the raw payload.
+                self._gate_complete(conn, job.id, "done", None)
+                return False
+
+            if command == "encerrar":
+                conn.execute(
+                    """UPDATE app.sessions
+                       SET active=false, facts='[]', absent='[]',
+                           last_question=NULL, asked_questions='[]', updated_at=now()
+                       WHERE instance=%s AND wid=%s""",
+                    (message.instance, message.wid),
+                )
+                self._gate_complete(
+                    conn, job.id,
+                    "ready",
+                    DEACTIVATED,
+                    delay_seconds=self.settings.gate_reply_delay_seconds,
+                )
+                return False
+
+            return True
+
+    @staticmethod
+    def _gate_complete(
+        conn: psycopg.Connection[dict[str, Any]],
+        job_id: int,
+        status: str,
+        response: str | None,
+        *,
+        delay_seconds: float = 0,
+    ) -> None:
+        if status not in ("ready", "done"):
+            raise ValueError("unsupported gate state")
+        changed = conn.execute(
+            """UPDATE app.inbox
+               SET status=%s, response=%s, payload=CASE WHEN %s='done' THEN '{}'::jsonb ELSE payload END,
+                   available_at=CASE WHEN %s='ready' THEN now() + (%s * interval '1 second')
+                       ELSE available_at END,
+                   updated_at=now()
+               WHERE id=%s AND status='processing'""",
+            (status, response, status, status, delay_seconds, job_id),
+        )
+        if changed.rowcount != 1:
+            raise RuntimeError("job gate transition lost")
 
     def reserve(self, job: Job) -> bool:
         """Atomic daily quota per sender and global; each attempt consumes one reservation."""

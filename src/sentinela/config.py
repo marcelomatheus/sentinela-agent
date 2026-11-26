@@ -4,6 +4,13 @@ from pydantic import Field, HttpUrl, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def validate_evolution_instance_name(value: str) -> str:
+    """Preserve Unicode names while forbidding path separators and punctuation."""
+    if not 1 <= len(value) <= 80 or not all(char.isalnum() or char in "_-" for char in value):
+        raise ValueError("O nome da instância deve conter de 1 a 80 caracteres alfanuméricos, _ ou -")
+    return value
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     postgres_host: str = "localhost"
@@ -14,13 +21,16 @@ class Settings(BaseSettings):
     webhook_api_key: SecretStr
     evolution_api_url: HttpUrl
     evolution_api_key: SecretStr
-    evolution_instance: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
+    evolution_instance: str = Field(min_length=1, max_length=80)
     openai_api_key: SecretStr
     openai_model: str = "gpt-5.4-mini"
     openai_transcription_model: str = "gpt-transcribe"
     safe_browsing_api_key: SecretStr = SecretStr("")
     max_body_bytes: int = Field(default=256_000, ge=1024, le=2_000_000)
     max_media_bytes: int = Field(default=8_000_000, ge=1024, le=20_000_000)
+
+    # Delay command replies in the inbox without sleeping in the worker.
+    gate_reply_delay_seconds: float = Field(default=1.5, ge=0, le=5)
 
     guard_max_chars: int = Field(default=4000, ge=256, le=8000)
     guard_max_questions: int = Field(default=3, ge=0, le=4)
@@ -29,6 +39,11 @@ class Settings(BaseSettings):
     guard_max_output_tokens: int = Field(default=768, ge=256, le=2048)
     guard_timeout_seconds: int = Field(default=25, ge=5, le=60)
     guard_audio_max_bytes: int = Field(default=500000, ge=10000, le=1000000)
+
+    @field_validator("evolution_instance")
+    @classmethod
+    def evolution_instance_name(cls, value: str) -> str:
+        return validate_evolution_instance_name(value)
 
     @field_validator("postgres_password", "webhook_api_key")
     @classmethod

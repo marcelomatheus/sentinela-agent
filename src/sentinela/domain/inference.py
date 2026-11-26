@@ -64,18 +64,23 @@ def question_options(assessment: Assessment, absent: frozenset[Fact]) -> tuple[s
 
 
 def render(assessment: Assessment, question: str | None = None) -> str:
-    lines = [f"🛡️ *Sentinela — risco {assessment.risk.value}*", ""]
-    if assessment.rules:
-        for r in assessment.rules:
-            lines.append(f"• {r.conclusion} ({r.id}). {r.advice}")
+    """Short and friendly messages composed from trusted rule content.
+
+    Full rule details stay in the domain; only up to two concise, actionable
+    findings are shown to the person, without raw model prose or IDs.
+    """
+    if assessment.risk == Risk.HIGH:
+        lines = ["⚠️ Atenção, encontrei sinais de um possível golpe."]
+        for matched in assessment.rules[:2]:
+            lines.append(f"{matched.conclusion}. {matched.advice}")
+    elif assessment.risk == Risk.MODERATE:
+        lines = ["🤔 Vejo alguns sinais de alerta, mas ainda preciso entender melhor."]
     else:
-        lines.append("Não há informação suficiente para confirmar fraude ou segurança.")
-    if assessment.facts:
-        lines.extend(["", "Indícios: " + ", ".join(f.value.replace("_", " ") for f in sorted(assessment.facts)) + "."])
-    lines.extend(["", "Não compartilhe senhas/códigos. Confirme pelo canal oficial; não use links enviados pelo contato.",
-                  "Se já houve pagamento ou exposição de dados, contate seu banco pelos canais oficiais.",
-                  "Esta é uma triagem, não uma confirmação de fraude."])
+        lines = ["Ainda tenho poucas informações para avaliar. 🙂"]
+
     if question is not None and question in QUESTIONS:
-        lines.extend(["", QUESTIONS[question][1]])
-    lines.extend(["", "Envie /nova para iniciar outro caso.", f"Referência: {SOURCE}"])
+        lines.append(QUESTIONS[question][1])
+    elif assessment.risk != Risk.HIGH:
+        lines.append("Por segurança, não clique em links nem envie códigos ou senhas.")
+
     return "\n".join(lines)

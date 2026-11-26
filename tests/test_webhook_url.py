@@ -103,3 +103,49 @@ def test_webhook_configuration_sends_authenticated_internal_target(
     assert webhook["headers"] == {"apikey": "webhook-credential-1234567890"}
     assert webhook["events"] == ["MESSAGES_UPSERT", "PRESENCE_UPDATE"]
     assert webhook["enabled"] is True
+    assert webhook["byEvents"] is False
+    assert webhook["base64"] is False
+    assert "webhookByEvents" not in webhook
+    assert "webhookBase64" not in webhook
+
+
+def test_unicode_instance_is_encoded_when_configuring_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    import sys
+    from sentinela.infrastructure import webhook_setup
+
+    requested: list[str] = []
+
+    def capture(self: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
+        requested.append(url)
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(sys, "argv", ["configure_webhook", "--apply"])
+    monkeypatch.setenv("EVOLUTION_API_URL", "https://evolution.example.invalid")
+    monkeypatch.setenv("EVOLUTION_INSTANCE", "meu-número")
+    monkeypatch.setenv("WEBHOOK_URL", "http://sentinela-api:8080/webhooks/evolution")
+    monkeypatch.setenv("WEBHOOK_API_KEY", "webhook-credential-1234567890")
+    monkeypatch.setenv("EVOLUTION_API_KEY", "evolution-credential")
+    monkeypatch.setattr(httpx.Client, "post", capture)
+    webhook_setup.main()
+    assert requested == [
+        "https://evolution.example.invalid/webhook/set/meu-n%C3%BAmero"
+    ]
+
+
+def test_invalid_instance_is_rejected_before_webhook_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from sentinela.infrastructure.webhook_setup import main
+
+    monkeypatch.setattr(sys, "argv", ["configure_webhook", "--apply"])
+    monkeypatch.setenv("EVOLUTION_API_URL", "https://evolution.example.invalid")
+    monkeypatch.setenv("EVOLUTION_INSTANCE", "../other")
+    monkeypatch.setenv("WEBHOOK_API_KEY", "webhook-credential-1234567890")
+    monkeypatch.setenv("EVOLUTION_API_KEY", "evolution-credential")
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2

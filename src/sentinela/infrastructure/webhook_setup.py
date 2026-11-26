@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 from dotenv import load_dotenv
+from sentinela.config import validate_evolution_instance_name
 
 PRIVATE_WEBHOOK_HOST = "sentinela-api"
 PRIVATE_WEBHOOK_PORT = 8080
@@ -60,7 +61,10 @@ def main() -> None:
 
     load_dotenv()
     base = os.environ["EVOLUTION_API_URL"].rstrip("/")
-    instance = quote(os.environ["EVOLUTION_INSTANCE"], safe="")
+    try:
+        instance = quote(validate_evolution_instance_name(os.environ["EVOLUTION_INSTANCE"]), safe="")
+    except ValueError as exc:
+        parser.error(str(exc))
     target_raw = os.getenv("WEBHOOK_URL") or os.getenv("PUBLIC_WEBHOOK_URL", "")
     try:
         target = validate_webhook_target(target_raw)
@@ -75,8 +79,8 @@ def main() -> None:
         "webhook": {
             "enabled": True,
             "url": target,
-            "webhookByEvents": False,
-            "webhookBase64": False,
+            "byEvents": False,
+            "base64": False,
             "headers": {"apikey": secret},
             "events": ["MESSAGES_UPSERT", "PRESENCE_UPDATE"],
         }

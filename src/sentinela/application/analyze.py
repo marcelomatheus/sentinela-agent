@@ -28,7 +28,7 @@ class AnalyzeMessage:
     def execute(self, message: Message, session: Session) -> AnalysisResult:
         if message.kind == Kind.TEXT and message.text.strip().lower() == "/nova":
             return AnalysisResult(replace(session, session_id=uuid4(), facts=frozenset(), absent=frozenset(), last_question=None, asked_questions=frozenset()),
-                                  "Novo caso iniciado. Envie a mensagem, foto ou áudio suspeito.")
+                                  "Prontinho! 😊 Vamos começar outro caso. Pode me mandar a mensagem, foto ou áudio suspeito.")
         text = message.text
         rejection = self.policy.preflight(text)
         if rejection is not None:

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS app.sessions (
   session_id uuid NOT NULL, facts jsonb NOT NULL DEFAULT '[]',
   absent jsonb NOT NULL DEFAULT '[]', last_question text,
   asked_questions jsonb NOT NULL DEFAULT '[]',
+  active boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (instance, wid)
 );
 CREATE TABLE IF NOT EXISTS app.inbox (
