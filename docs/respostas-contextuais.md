@@ -20,7 +20,7 @@ Anteriormente, o renderizador mostrava literalmente a classificação e até dua
 
 **Acompanhamento do mesmo caso:** “Agora pediram outro código pelo aplicativo.”
 
-> Entendi: o contato pediu outro código pelo aplicativo. Sobre esse caso, Ligue para o banco pelos canais oficiais.
+> Entendi: o contato pediu outro código pelo aplicativo. Por segurança, ligue para o banco pelos canais oficiais.
 
 **Outro assunto:** “Uma loja anunciou preço baixo e pediu adiantamento.”
 
