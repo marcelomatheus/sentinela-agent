@@ -110,6 +110,7 @@ jobs:
         run: |
           cp .env.example .env
           cat >> .env <<'EOF'
+          POSTGRES_PASSWORD=disposable-ci-postgres-password-123456789
           DOMAIN_NAME=sentinela.example.com
           PROXY_NETWORK=celo-network
           TRAEFIK_ENTRYPOINT=web
