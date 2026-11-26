@@ -93,3 +93,20 @@ def test_different_sessions_are_independent():
     second = agent.execute(message("recebi mensagem"), second).session
     assert Fact.OTP in first.facts
     assert Fact.OTP not in second.facts
+
+
+def test_greeting_is_friendly_and_no_model_is_called():
+    agent, fake, session = setup()
+    greeting = agent.execute(message("Bom dia"), session)
+    assert "Oi!" in greeting.response
+    assert "Sentinela" in greeting.response
+    assert greeting.session == session
+    assert fake.calls == 0
+
+
+def test_new_case_has_friendly_confirmation():
+    agent, fake, session = setup()
+    reply = agent.execute(message("/nova"), session)
+    assert "Prontinho!" in reply.response
+    assert reply.session.session_id != session.session_id
+    assert fake.calls == 0

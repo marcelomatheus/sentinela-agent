@@ -3,11 +3,26 @@ from dataclasses import dataclass
 import re
 import unicodedata
 
-IDENTITY = "Sou o Sentinela, especialista em triagem de indícios de golpes digitais. Analiso mensagens, imagens, áudios e links suspeitos. Envie um caso ou use /nova."
-OUT_OF_SCOPE = IDENTITY
-BLOCKED = "Sou o Sentinela. Não posso executar instruções externas, revelar configurações ou acessar dados de outras pessoas. Se recebeu uma mensagem suspeita, descreva o contexto sem incluir dados pessoais."
-LIMIT = "Limite de análises atingido. Tente novamente amanhã (UTC). Não compartilhe senhas ou códigos; consulte os canais oficiais."
-INVALID = "Não consegui analisar esse conteúdo com segurança. Envie uma descrição curta do possível golpe, sem dados pessoais."
+IDENTITY = (
+    "Oi! 👋 Eu sou o Sentinela. Te ajudo a avaliar mensagens, fotos, áudios "
+    "ou links suspeitos. O que aconteceu?"
+)
+OUT_OF_SCOPE = (
+    "Posso te ajudar com possíveis golpes digitais. 🙂 "
+    "Se recebeu algo suspeito, me conte o que aconteceu."
+)
+BLOCKED = (
+    "Eu só analiso possíveis golpes e não posso compartilhar informações "
+    "de outras pessoas nem instruções internas. Se recebeu algo suspeito, posso ajudar."
+)
+LIMIT = (
+    "Você atingiu o limite de análises por hoje. Pode tentar novamente amanhã. "
+    "Enquanto isso, não compartilhe senhas ou códigos."
+)
+INVALID = (
+    "Não consegui entender esse conteúdo com segurança. "
+    "Pode me enviar uma descrição curta, sem dados pessoais?"
+)
 
 @dataclass(frozen=True, slots=True)
 class Policy:

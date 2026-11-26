@@ -180,3 +180,10 @@ As regras são adaptações didáticas dos padrões de alerta, não transcriçõ
 ### Compatibilidade da Evolution API 2.3.7
 
 O script `scripts/configure_webhook.py` usa `byEvents: false` e `base64: false` dentro do objeto `webhook`. Esta nomenclatura foi verificada no DTO da release 2.3.7; outras versões/documentações podem expor nomes diferentes. Nomes Unicode de instância, como `meu-número`, são aceitos e percent-encoded nos caminhos HTTP, sem permitir barras ou espaços.
+
+
+### Respostas curtas e atraso nas confirmações
+
+As respostas de ativação e encerramento são mensagens determinísticas, sem invocar a OpenAI. A entrega é agendada na fila com `available_at`, padrão **1,5 segundo** (variável `GATE_REPLY_DELAY_SECONDS`, faixa 0–5). Não há `sleep` nem retenção de transação durante a espera. Mensagens posteriores do mesmo contato aguardam a confirmação; outros contatos continuam sendo processados.
+
+O agente mantém o escopo estrito de triagem, mas conversa com um tom acolhedor e simples. A resposta final mostra no máximo duas conclusões práticas, sem códigos internos das regras, lista técnica de fatos ou referência bibliográfica em cada mensagem. Fatos, classificação e recomendações seguem determinísticos; a LLM apenas extrai fatos e seleciona perguntas permitidas.

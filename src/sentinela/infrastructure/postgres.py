@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from sentinela.config import Settings
+from sentinela.domain.chat import ACTIVATED, DEACTIVATED
 from sentinela.domain.model import Fact, Kind, Message, Session
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +107,8 @@ class Store:
                 self._gate_complete(
                     conn, job.id,
                     "ready",
-                    "Sentinela ativo. Envie a mensagem, imagem ou áudio suspeito. Para terminar, envie Encerrar.",
+                    ACTIVATED,
+                    delay_seconds=self.settings.gate_reply_delay_seconds,
                 )
                 return False
 
@@ -126,7 +128,8 @@ class Store:
                 self._gate_complete(
                     conn, job.id,
                     "ready",
-                    "Sessão encerrada. Para iniciar novamente, envie Sentinela.",
+                    DEACTIVATED,
+                    delay_seconds=self.settings.gate_reply_delay_seconds,
                 )
                 return False
 
@@ -138,15 +141,19 @@ class Store:
         job_id: int,
         status: str,
         response: str | None,
+        *,
+        delay_seconds: float = 0,
     ) -> None:
         if status not in ("ready", "done"):
             raise ValueError("unsupported gate state")
         changed = conn.execute(
             """UPDATE app.inbox
                SET status=%s, response=%s, payload=CASE WHEN %s='done' THEN '{}'::jsonb ELSE payload END,
+                   available_at=CASE WHEN %s='ready' THEN now() + (%s * interval '1 second')
+                       ELSE available_at END,
                    updated_at=now()
                WHERE id=%s AND status='processing'""",
-            (status, response, status, job_id),
+            (status, response, status, status, delay_seconds, job_id),
         )
         if changed.rowcount != 1:
             raise RuntimeError("job gate transition lost")

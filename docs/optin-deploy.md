@@ -34,3 +34,7 @@ CI: Python 3.15.2, Poetry 2.2.1, `poetry check --lock`, instalação com depend�
 Os testes de PostgreSQL cobrem ativação, silêncio, encerramento, reativação, sessão persistida, isolamento, rollback e retry de gate, deduplicação, transições `ready/sending/uncertain` e exclusividade do worker. Testes unitários cobrem URL Unicode, comandos sem cota/IA e payload Evolution v2.3.7.
 
 Limitação: não houve comunicação com uma instância Evolution real nem uso de chave OpenAI neste ambiente; os testes externos continuam necessários na VPS.
+
+
+## Naturalidade e atraso de confirmação
+O texto de ativação e encerramento é curto e acolhedor, centralizado em `src/sentinela/domain/chat.py`. A confirmação usa `available_at = now() + GATE_REPLY_DELAY_SECONDS`, com padrão de 1,5 s, em uma única transação com o estado da sessão. O worker não dorme enquanto aguarda a resposta e não usa a OpenAI para esses comandos. A fila bloqueia mensagens posteriores do mesmo contato até que a resposta seja enviada ou declarada incerta. Outros contatos não precisam aguardar o atraso. O comando `/nova` continua sendo tratado no caso de uso.

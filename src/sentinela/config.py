@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     max_body_bytes: int = Field(default=256_000, ge=1024, le=2_000_000)
     max_media_bytes: int = Field(default=8_000_000, ge=1024, le=20_000_000)
 
+    # Delay command replies in the inbox without sleeping in the worker.
+    gate_reply_delay_seconds: float = Field(default=1.5, ge=0, le=5)
+
     guard_max_chars: int = Field(default=4000, ge=256, le=8000)
     guard_max_questions: int = Field(default=3, ge=0, le=4)
     guard_user_daily: int = Field(default=20, ge=1, le=100)

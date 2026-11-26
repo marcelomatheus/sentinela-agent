@@ -9,6 +9,8 @@ from uuid import uuid4
 
 import pytest
 
+from sentinela.domain.chat import ACTIVATED, DEACTIVATED
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_POSTGRES_TESTS") != "1",
     reason="requires disposable PostgreSQL",
@@ -48,9 +50,17 @@ def claim(store, sent):
 def confirm_ready(store, job, expected: str) -> None:
     with store.connect() as conn:
         row = conn.execute(
-            "SELECT status,response FROM app.inbox WHERE id=%s", (job.id,)
+            "SELECT status,response,available_at,now() AS db_now FROM app.inbox WHERE id=%s",
+            (job.id,),
         ).fetchone()
-        assert row == {"status": "ready", "response": expected}
+        assert row["status"] == "ready"
+        assert row["response"] == expected
+        # Scheduled delivery: the worker never sleeps inside a message handler.
+        assert row["available_at"] > row["db_now"]
+        conn.execute(
+            "UPDATE app.inbox SET available_at=now() WHERE id=%s",
+            (job.id,),
+        )
     outgoing = store.claim()
     assert outgoing is not None
     assert outgoing.id == job.id and outgoing.response == expected
@@ -89,7 +99,7 @@ def test_activate_analyze_close_ignore_reactivate_and_recover(store) -> None:
     activated = claim(store, first)
     assert store.gate(activated) is False
     before = store.session(first)
-    confirm_ready(store, activated, "Sentinela ativo. Envie a mensagem, imagem ou áudio suspeito. Para terminar, envie Encerrar.")
+    confirm_ready(store, activated, ACTIVATED)
 
     # State survives reconstructing the Store object and calling recovery.
     fresh = Store(store.settings)
@@ -115,7 +125,7 @@ def test_activate_analyze_close_ignore_reactivate_and_recover(store) -> None:
     close = message("  ENcErRaR ", sender)
     closing = claim(fresh, close)
     assert fresh.gate(closing) is False
-    confirm_ready(fresh, closing, "Sessão encerrada. Para iniciar novamente, envie Sentinela.")
+    confirm_ready(fresh, closing, DEACTIVATED)
 
     with fresh.connect() as conn:
         session = conn.execute(
@@ -141,7 +151,7 @@ def test_activate_analyze_close_ignore_reactivate_and_recover(store) -> None:
     assert after.session_id != before.session_id
     assert not after.facts and not after.absent and not after.asked_questions
     assert after.last_question is None
-    confirm_ready(fresh, resumed_job, "Sentinela ativo. Envie a mensagem, imagem ou áudio suspeito. Para terminar, envie Encerrar.")
+    confirm_ready(fresh, resumed_job, ACTIVATED)
 
 
 def test_separate_contact_remains_inactive_even_if_other_is_active(store) -> None:
@@ -149,7 +159,7 @@ def test_separate_contact_remains_inactive_even_if_other_is_active(store) -> Non
     active_message = message("Sentinela", alice)
     activated = claim(store, active_message)
     assert store.gate(activated) is False
-    confirm_ready(store, activated, "Sentinela ativo. Envie a mensagem, imagem ou áudio suspeito. Para terminar, envie Encerrar.")
+    confirm_ready(store, activated, ACTIVATED)
 
     other = message("Ajuda", bob)
     assert store.gate(claim(store, other)) is False
@@ -178,8 +188,19 @@ def test_ready_activation_blocks_following_message_until_delivery(store) -> None
     next_message = message("Golpe bancário", sender)
     assert store.enqueue(next_message)
     assert store.gate(activation) is False
-    # The pending message cannot overtake a ready confirmation.
-    assert store.claim() is not None  # claims activation as 'sending'
+    # The command confirmation is intentionally pending for a short moment.
+    # A following message from this contact cannot bypass that waiting reply.
+    assert store.claim() is None
+    with store.connect() as conn:
+        scheduled = conn.execute(
+            "SELECT status,available_at,now() AS db_now FROM app.inbox WHERE id=%s",
+            (activation.id,),
+        ).fetchone()
+        assert scheduled["status"] == "ready"
+        assert scheduled["available_at"] > scheduled["db_now"]
+        conn.execute("UPDATE app.inbox SET available_at=now() WHERE id=%s", (activation.id,))
+    sending = store.claim()
+    assert sending is not None and sending.id == activation.id
     with store.connect() as conn:
         row = conn.execute("SELECT status FROM app.inbox WHERE id=%s", (activation.id,)).fetchone()
     assert row["status"] == "sending"
@@ -226,7 +247,7 @@ def test_gate_rollback_retry_and_duplicate_message(store, monkeypatch) -> None:
     assert store.gate(pending) is False
     # Duplicate webhook does not enqueue again, even after command processed.
     assert not store.enqueue(msg)
-    confirm_ready(store, pending, "Sentinela ativo. Envie a mensagem, imagem ou áudio suspeito. Para terminar, envie Encerrar.")
+    confirm_ready(store, pending, ACTIVATED)
 
 
 def test_worker_advisory_lock_is_exclusive(store) -> None:
@@ -236,3 +257,43 @@ def test_worker_advisory_lock_is_exclusive(store) -> None:
         with pytest.raises(RuntimeError, match="already holds the lock"):
             with Store(store.settings).worker_lock():
                 raise AssertionError("second worker must not start")
+
+
+def test_delayed_reply_does_not_block_other_contacts(store) -> None:
+    sender, other = wid(), wid()
+    activate = message("Sentinela", sender)
+    assert store.gate(claim(store, activate)) is False
+
+    # Same sender must wait for activation confirmation.
+    second = message("Recebi um aviso suspeito", sender)
+    assert store.enqueue(second)
+
+    # An unrelated contact can still be claimed and gated immediately.
+    stranger = message("Olá", other)
+    assert store.enqueue(stranger)
+    claimed = store.claim()
+    assert claimed is not None and claimed.message.message_id == stranger.message_id
+    assert store.gate(claimed) is False
+
+    # The delayed activation is still pending and did not consume quota.
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT available_at,now() AS db_now FROM app.inbox WHERE instance=%s AND message_id=%s",
+            (activate.instance,activate.message_id),
+        ).fetchone()
+        assert row["available_at"] > row["db_now"]
+        quota = conn.execute(
+            "SELECT used FROM app.guard_budget WHERE scope=%s",
+            (f"sender:{activate.instance}:{sender}",),
+        ).fetchone()
+    assert quota is None
+
+
+def test_zero_delay_can_be_configured(store) -> None:
+    instant = type(store)(store.settings.model_copy(update={"gate_reply_delay_seconds": 0.0}))
+    activate = message("Sentinela", wid())
+    assert instant.gate(claim(instant, activate)) is False
+    pending = instant.claim()
+    assert pending is not None and pending.message.message_id == activate.message_id
+    assert pending.response == ACTIVATED
+    instant.finish(pending, "done")
