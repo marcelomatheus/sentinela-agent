@@ -40,7 +40,9 @@ export async function createBff(config: BffConfig = readConfig()) {
   const app = Fastify({ logger: true, bodyLimit: 9000000, requestTimeout: 35000 });
   await app.register(cookie);
   await app.register(helmet, { global: true });
-  await app.register(rateLimit, { global: false });
+  await app.register(rateLimit, {
+    global: true, max: 120, timeWindow: "1 minute",
+  });
   await app.register(multipart, {
     limits: { files: 1, fileSize: 8000000, fields: 0 },
   });
@@ -52,6 +54,23 @@ export async function createBff(config: BffConfig = readConfig()) {
   const secure = config.BFF_ALLOW_HTTP !== "true";
   const sessionCookie = "sentinela_session";
   const loginCookie = "sentinela_oauth";
+  const activeStreams = new Map<string, number>();
+  const accountLimits = new Map<string, { count: number; resets: number }>();
+
+  function limitAccount(principal: string): void {
+    const now = Date.now();
+    const value = accountLimits.get(principal);
+    const current = value && value.resets > now
+      ? value : {count: 0, resets: now + 60000};
+    if (current.count >= 60) throw error(429, "request limit exceeded");
+    current.count += 1;
+    accountLimits.set(principal, current);
+    if (accountLimits.size > 2000) {
+      for (const [key, v] of accountLimits) {
+        if (v.resets <= now) accountLimits.delete(key);
+      }
+    }
+  }
 
   async function identity(request: FastifyRequest): Promise<Identity> {
     const value = request.cookies[sessionCookie];
@@ -70,12 +89,13 @@ export async function createBff(config: BffConfig = readConfig()) {
     if (mutable && !validCsrf(user, request.headers["x-csrf-token"])) {
       throw error(403, "invalid CSRF token");
     }
+    if (mutable) limitAccount(user.principal);
     return user;
   }
 
   async function proxy(
     user: Identity, method: string, path: string,
-    payload?: BodyInit, mime?: string, stream = false,
+    payload?: BodyInit, mime?: string, stream = false, streamSignal?: AbortSignal,
   ): Promise<Response> {
     const url = new URL("/internal/web" + path, config.SENTINELA_INTERNAL_URL);
     const content = typeof payload === "string" ? payload
@@ -90,7 +110,7 @@ export async function createBff(config: BffConfig = readConfig()) {
           ...(mime ? {"content-type":mime} : {}),
         },
         body: payload,
-        signal: stream ? undefined : AbortSignal.timeout(30000),
+        signal: stream ? streamSignal : AbortSignal.timeout(30000),
         cache: "no-store",
       },
     );
@@ -112,7 +132,7 @@ export async function createBff(config: BffConfig = readConfig()) {
 
   app.get("/health/live", async () => ({status:"ok"}));
 
-  app.get("/auth/login", async (_request, reply) => {
+  app.get("/auth/login", {config:{rateLimit:{max:10,timeWindow:"1 minute"}}}, async (_request, reply) => {
     const state=oidc.randomState();
     const verifier=oidc.randomPKCECodeVerifier();
     const nonce=oidc.randomNonce();
@@ -229,30 +249,41 @@ export async function createBff(config: BffConfig = readConfig()) {
     const query=z.object({after:z.coerce.number().int().min(0).default(0)}).parse(request.query);
     const lastId=Number(request.headers["last-event-id"]??0);
     const after=Number.isSafeInteger(lastId)&&lastId>=0?Math.max(query.after,lastId):query.after;
-    const upstream=await proxy(
-      user,"GET",`/conversations/${params.id}/events?after=${after}`,
-      undefined,undefined,true,
-    );
-    if (!upstream.ok || !upstream.body) return forward(reply,upstream);
-    reply.hijack();
-    reply.raw.writeHead(200,{
-      "content-type":"text/event-stream; charset=utf-8",
-      "cache-control":"no-store,no-transform",
-      "x-accel-buffering":"no",
-      "connection":"keep-alive",
-    });
+    const active=activeStreams.get(user.principal)??0;
+    if(active>=2)throw error(429,"too many active event streams");
+    activeStreams.set(user.principal,active+1);
     const controller=new AbortController();
-    reply.raw.on("close",()=>controller.abort());
+    const close=()=>controller.abort();
+    reply.raw.on("close",close);
     try {
-      for await (const chunk of upstream.body) {
-        if (controller.signal.aborted) break;
-        if (!reply.raw.write(Buffer.from(chunk))) await once(reply.raw,"drain");
+      const upstream=await proxy(
+        user,"GET",/`conversations/${params.id}/events?after=${after}`,
+        undefined,undefined,true,controller.signal,
+      );
+      if (!upstream.ok || !upstream.body) return forward(reply,upstream);
+      reply.hijack();
+      reply.raw.writeHead(200,{
+        "content-type":"text/event-stream; charset=utf-8",
+        "cache-control":"no-store,no-transform",
+        "x-accel-buffering":"no",
+        "connection":"keep-alive",
+      });
+      try {
+        for await (const chunk of upstream.body) {
+          if(controller.signal.aborted)break;
+          if(!reply.raw.write(Buffer.from(chunk)))await once(reply.raw,"drain");
+        }
+      }catch{
+        app.log.warn("SSE upstream disconnected");
+      }finally{
+        await upstream.body.cancel().catch(()=>undefined);
+        reply.raw.end();
       }
-    } catch {
-      app.log.warn("SSE upstream disconnected");
-    } finally {
-      await upstream.body.cancel().catch(()=>undefined);
-      reply.raw.end();
+    }finally{
+      reply.raw.off("close",close);
+      const remaining=(activeStreams.get(user.principal)??1)-1;
+      if(remaining<=0)activeStreams.delete(user.principal);
+      else activeStreams.set(user.principal,remaining);
     }
   });
 
