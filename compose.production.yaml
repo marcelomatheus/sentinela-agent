@@ -1,0 +1,76 @@
+# Overlay de producao: mesmo projeto/volumes do compose.yaml original.
+# Nao usar isoladamente. Requer Docker Compose com suporte a !reset.
+services:
+  bff:
+    environment:
+      PORT: "19573"
+      BFF_PUBLIC_URL: https://${DOMAIN_NAME:?configure DOMAIN_NAME}
+      BFF_ALLOW_HTTP: "false"
+    ports: !reset []
+    expose:
+      - "19573"
+    networks:
+      - default
+      - proxy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cpus: "0.75"
+    mem_limit: 512m
+    pids_limit: 160
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:19573/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 25s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-celo-network}
+      traefik.http.routers.sentinela-bff.rule: Host(`${DOMAIN_NAME:?configure DOMAIN_NAME}`) && (Path(`/api`) || PathPrefix(`/api/`) || Path(`/auth`) || PathPrefix(`/auth/`))
+      traefik.http.routers.sentinela-bff.entrypoints: ${TRAEFIK_ENTRYPOINT:-web}
+      traefik.http.routers.sentinela-bff.priority: "100"
+      traefik.http.routers.sentinela-bff.service: sentinela-bff
+      traefik.http.services.sentinela-bff.loadbalancer.server.port: "19573"
+
+  web:
+    profiles: [web]
+    build:
+      context: .
+      dockerfile: web/Dockerfile.production
+    depends_on:
+      bff:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    cpus: "0.35"
+    mem_limit: 128m
+    pids_limit: 80
+    expose:
+      - "18561"
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:18561/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-celo-network}
+      traefik.http.routers.sentinela-web.rule: Host(`${DOMAIN_NAME:?configure DOMAIN_NAME}`)
+      traefik.http.routers.sentinela-web.entrypoints: ${TRAEFIK_ENTRYPOINT:-web}
+      traefik.http.routers.sentinela-web.priority: "10"
+      traefik.http.routers.sentinela-web.service: sentinela-web
+      traefik.http.services.sentinela-web.loadbalancer.server.port: "18561"
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-celo-network}
