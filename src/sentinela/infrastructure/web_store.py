@@ -94,6 +94,31 @@ class WebStore:
             raise LookupError("conversation not found")
         return row
 
+    def message_snapshot(
+        self, owner: str, conv: UUID, before: datetime | None,
+    ) -> dict[str, Any]:
+        """Read the event cursor before the messages: no event can be missed.
+
+        An event between these reads is either present in the subsequent
+        message list or picked up by the SSE stream (duplicates are harmless).
+        """
+        with self.connect() as conn:
+            self._owned(conn, owner, conv)
+            cursor = conn.execute(
+                "SELECT COALESCE(MAX(id),0) AS cursor FROM app.web_events WHERE conversation_id=%s",
+                (conv,),
+            ).fetchone()["cursor"]
+            rows = conn.execute(
+                """SELECT * FROM app.web_messages
+                   WHERE conversation_id=%s AND (%s::timestamptz IS NULL OR created_at < %s)
+                   ORDER BY created_at DESC,id DESC LIMIT 50""",
+                (conv, before, before),
+            ).fetchall()
+        return {
+            "messages": [self._serialize(row) for row in reversed(rows)],
+            "cursor": cursor,
+        }
+
     def messages(self, owner: str, conv: UUID, before: datetime | None, limit: int = 50) -> list[dict[str, Any]]:
         with self.connect() as conn:
             self._owned(conn, owner, conv)

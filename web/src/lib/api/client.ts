@@ -28,7 +28,7 @@ export async function apiFetch<T>(
 }
 
 const conversations=z.object({conversations:z.array(conversationSchema)});
-const messages=z.object({messages:z.array(messageSchema)});
+const messages=z.object({messages:z.array(messageSchema),cursor:z.number().int().nonnegative()});
 const sent=z.object({message:messageSchema,duplicate:z.boolean()});
 const attachment=z.object({id:z.uuid(),mime:z.string(),size:z.number()});
 

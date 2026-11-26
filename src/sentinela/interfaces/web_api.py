@@ -50,8 +50,9 @@ def create_web_router(settings: Settings, web_store: WebStore, event_bus: WebEve
         owner: str = owner_dep,
     ):
         try:
-            messages = await run_in_threadpool(web_store.messages,owner,conversation_id,before)
-            return {"messages":messages}
+            return await run_in_threadpool(
+                web_store.message_snapshot, owner, conversation_id, before,
+            )
         except LookupError:
             raise HTTPException(status_code=404,detail="conversation not found") from None
 

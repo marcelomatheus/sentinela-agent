@@ -36,9 +36,11 @@ export default function ChatPage({session}:{session:ActiveSession}){
   });
   useEffect(()=>{setOlder([]);setHasMore(true);},[conversationId]);
 
+  const historyReady=latest.data!==undefined;
   useEffect(()=>{
-    if(!conversationId)return;
-    const source=new EventSource(`/api/conversations/${conversationId}/events`,{withCredentials:true});
+    if(!conversationId||!historyReady)return;
+    const cursor=latest.data?.cursor??0;
+    const source=new EventSource(`/api/conversations/${conversationId}/events?after=${cursor}`,{withCredentials:true});
     source.onopen=()=>setConnected(true);
     source.onerror=()=>setConnected(false);
     const update=()=>{void cache.invalidateQueries({queryKey:["messages",conversationId]});};
@@ -47,7 +49,7 @@ export default function ChatPage({session}:{session:ActiveSession}){
     source.addEventListener("failed",update);
     source.addEventListener("reset",update);
     return ()=>{source.close();setConnected(false);};
-  },[conversationId,cache]);
+  },[conversationId,cache,historyReady]);
 
   const entries=useMemo(()=>{
     const set=new Map<string,Message>();
