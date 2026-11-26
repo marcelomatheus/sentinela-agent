@@ -21,17 +21,17 @@ def main()->None:
         messenger,OpenAITranscriber(settings),Policy(settings.guard_max_chars,settings.guard_max_questions))
     store.migrate_guardrails()
     store.recover()
-    idle = 0
+    next_cleanup = time.monotonic()
     while True:
+        if time.monotonic() >= next_cleanup:
+            try:
+                store.prune()
+            except Exception:
+                log.warning("retention_cleanup_failed")
+            next_cleanup = time.monotonic() + 3600
         job=store.claim()
         if job is None:
             time.sleep(1)
-            idle += 1
-            if idle % 3600 == 0:
-                try:
-                    store.prune()
-                except Exception:
-                    log.warning("retention_cleanup_failed")
             continue
         if job.response is not None:
             try:
