@@ -10,7 +10,6 @@ export const envSchema = z.object({
   BFF_SESSION_KEY: z.string().min(40),
   WEB_INTERNAL_KEY: z.string().min(32),
   SENTINELA_INTERNAL_URL: z.url().default("http://api:8080"),
-  WEB_DIST: z.string().default("/app/web-dist"),
   BFF_ALLOW_HTTP: z.enum(["true","false"]).default("false"),
 });
 

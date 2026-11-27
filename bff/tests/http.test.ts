@@ -18,7 +18,6 @@ const config = envSchema.parse({
   BFF_SESSION_KEY:Buffer.alloc(32,9).toString("base64url"),
   WEB_INTERNAL_KEY:secret,
   SENTINELA_INTERNAL_URL:"http://127.0.0.1:8080",
-  WEB_DIST:"/nonexistent-test-assets",
 });
 const key=require32Bytes(config.BFF_SESSION_KEY);
 
@@ -32,6 +31,20 @@ async function cookie() {
 afterEach(()=>{vi.unstubAllGlobals();});
 
 describe("BFF HTTP integration",()=>{
+  it("returns 404 instead of serving frontend or assets",async()=>{
+    const app=await createBff(config);
+    try{
+      for (const path of ["/","/app","/assets/index.js","/unknown"]) {
+        const response=await app.inject({
+          method:"GET",url:path,headers:{accept:"text/html"},
+        });
+        expect(response.statusCode).toBe(404);
+        expect(response.headers["content-type"]).not.toContain("text/html");
+      }
+      expect((await app.inject({method:"GET",url:"/health/live"})).statusCode).toBe(200);
+    }finally{await app.close();}
+  });
+
   it("does not expose conversations without an authenticated cookie",async()=>{
     const app=await createBff(config);
     try{

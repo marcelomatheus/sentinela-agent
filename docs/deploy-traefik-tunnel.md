@@ -21,7 +21,7 @@ API + worker WhatsApp --- whatsapp_internal ---> Evolution existente
 
 **Portas não convencionais:** frontend **18561**, BFF **19573**, ambas **somente internas ao Docker**. Não há `ports` para web/BFF e nenhum mapeamento dessas portas no host. Assim, não podem conflitar com bind de outros projetos; o Traefik identifica destinos por labels e rede. A porta legada 8080 da API continua acessível apenas via loopback do host, para não alterar a topologia WhatsApp atual. PostgreSQL não publica portas.
 
-O frontend usa uma imagem Nginx separada da imagem Fastify, cujo servidor ainda contém o SPA como fallback. Entretanto, no domínio de produção o Traefik faz o roteamento separado: o BFF recebe as rotas /api e /auth **diretamente**, incluindo SSE (sem um Nginx adicional que possa fazer buffering), e todas as demais rotas seguem para o React. Os dois serviços usam o mesmo hostname (sem CORS), portanto os cookies seguros HttpOnly e o fluxo OIDC/PKCE funcionam na mesma origem.
+O frontend usa uma imagem Nginx separada da imagem Fastify. O BFF não serve arquivos estáticos ou SPA; mantém somente autenticação, APIs e SSE. O Traefik encaminha /api e /auth **diretamente** ao BFF (sem Nginx intermediário que possa fazer buffering) e as demais rotas ao React. Os dois serviços usam o mesmo hostname (sem CORS), portanto os cookies seguros HttpOnly e o fluxo OIDC/PKCE funcionam na mesma origem.
 
 ## Preparar a VPS
 

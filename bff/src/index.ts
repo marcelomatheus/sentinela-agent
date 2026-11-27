@@ -3,10 +3,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import multipart from "@fastify/multipart";
-import fastifyStatic from "@fastify/static";
 import * as oidc from "openid-client";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 
 import { readConfig, type BffConfig } from "./config";
@@ -307,15 +304,6 @@ export async function createBff(config: BffConfig = readConfig()) {
     });
   });
 
-  if (existsSync(config.WEB_DIST)) {
-    await app.register(fastifyStatic,{root:join(config.WEB_DIST,"assets"),prefix:"/assets/"});
-    app.setNotFoundHandler((request,reply) => {
-      if (request.method==="GET" && request.headers.accept?.includes("text/html")) {
-        return reply.type("text/html").sendFile("index.html",config.WEB_DIST);
-      }
-      return reply.code(404).send({error:"not found"});
-    });
-  }
   return app;
 }
 
