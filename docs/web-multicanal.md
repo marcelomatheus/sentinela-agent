@@ -5,7 +5,7 @@
 **WhatsApp** → Evolution webhook → fila `app.inbox` → worker WhatsApp → `AnalyzeMessage`.
 **React** → BFF Fastify (OIDC/PKCE) → endpoints internos FastAPI autenticados → `app.web_jobs` → N workers web → **mesmo `AnalyzeMessage`** → `app.web_messages` e `app.web_events` → SSE.
 
-O BFF **não** executa Agno, OpenAI nem regras: atua como sessão web, autorização, proteção CSRF, validação Zod e tradução do contrato. O motor Python mantém as 12 regras, guardrails, política de risco e saída textual idênticos entre canais. As sessões e fatos são separados por canal e por conversa; `session_id` nunca é compartilhado.
+O BFF **não** executa Agno, OpenAI, regras ou arquivos estáticos: atua como sessão web, autorização, proteção CSRF, validação Zod e tradução do contrato. O motor Python mantém as 12 regras, guardrails, política de risco e saída textual idênticos entre canais. As sessões e fatos são separados por canal e por conversa; `session_id` nunca é compartilhado.
 
 ## Desenvolvimento e versões
 
@@ -25,7 +25,7 @@ O backend segue em Python 3.15.2 e Poetry 2.2.1, usando o `poetry.lock` existent
 3. Registre um cliente OIDC de aplicação web com callback `https://SEU_DOMINIO/auth/callback`. Configure `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (se cliente confidencial) e `BFF_PUBLIC_URL`.
 4. Mantenha `BFF_ALLOW_HTTP=false` em produção. Configure HTTPS no reverse proxy que encaminha ao host loopback `127.0.0.1:${BFF_PORT:-3005}`. **Nunca publique a porta FastAPI nem o PostgreSQL diretamente.**
 5. `docker compose --profile web up -d --build`. O processo FastAPI aplica a migração idempotente `db/002_web.sql`, e o worker web também a verifica ao subir.
-6. Acesse o domínio; login OIDC → home → chat. O BFF serve o SPA compilado, protege o cookie HttpOnly e assina identidade para a API Python.
+6. Acesse o domínio; login OIDC → home → chat. O Nginx serve o SPA; o BFF protege o cookie HttpOnly e assina identidade para a API Python.
 
 ## Garantias e limitações
 
