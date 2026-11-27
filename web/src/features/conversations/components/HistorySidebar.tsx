@@ -21,7 +21,8 @@ export default function HistorySidebar({
   const logout=useMutation({mutationFn:()=>client.logout(csrf),onSuccess:()=>{window.location.href="/";}});
   return <>
     {visible&&<button type="button" className="drawer-backdrop" aria-label="Fechar histórico" onClick={onClose}/>}
-    <aside className={visible?"chat-sidebar open":"chat-sidebar"} aria-label="Histórico de conversas">
+    <aside className={visible?"chat-sidebar open":"chat-sidebar"} aria-label="Histórico de conversas"
+      aria-hidden={!visible} inert={!visible}>
       <div className="sidebar-top">
         <NavLink className="sidebar-logo" to="/" title="Sentinela"><ShieldCheck/><span>SENTINELA</span></NavLink>
         <button type="button" className="icon-button sidebar-close" aria-label="Fechar" onClick={onClose}><X size={19}/></button>
