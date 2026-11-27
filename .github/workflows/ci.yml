@@ -106,3 +106,25 @@ jobs:
         run: npm run build
       - name: Build BFF production Docker image
         run: docker build -f bff/Dockerfile -t sentinela-web:ci .
+      - name: Build standalone React production Nginx image
+        run: docker build -f web/Dockerfile.production -t sentinela-react:ci .
+      - name: Validate production Traefik and Cloudflare Tunnel Compose
+        run: |
+          cp .env.example .env
+          cat >> .env <<'EOF'
+          POSTGRES_PASSWORD=disposable-ci-postgres-password-123456789
+          DOMAIN_NAME=sentinela.example.com
+          PROXY_NETWORK=celo-network
+          TRAEFIK_ENTRYPOINT=web
+          EOF
+          docker compose -f compose.yaml -f compose.production.yaml --profile web config --format json > /tmp/sentinela-production-compose.json
+          python3 scripts/check_production_compose.py /tmp/sentinela-production-compose.json CI
+          # O manifesto nao deve publicar portas frontend/BFF no host nem criar um novo edge.
+          python3 - <<'PY'
+          import json
+          c=json.load(open('/tmp/sentinela-production-compose.json'))
+          assert 'traefik' not in c['services'] and 'cloudflared' not in c['services']
+          assert not c['services']['web'].get('ports')
+          assert not c['services']['bff'].get('ports')
+          assert c['services']['web']['networks'].keys() == {'proxy'}
+          PY
