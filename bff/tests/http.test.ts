@@ -39,7 +39,7 @@ describe("BFF HTTP integration",()=>{
           method:"GET",url:path,headers:{accept:"text/html"},
         });
         expect(response.statusCode).toBe(404);
-        expect(response.headers["content-type"]).not.toMatch(/^text\\/html/);
+        expect(response.headers["content-type"]).not.toContain("text/html");
       }
       expect((await app.inject({method:"GET",url:"/health/live"})).statusCode).toBe(200);
     }finally{await app.close();}
